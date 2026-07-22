@@ -19,4 +19,5 @@ class AnalysisConfig(BaseModel):
     output_path: Path = Path("report.html")
     eeg_left: str = "EEG_L"
     eeg_right: str = "EEG_R"
+    movement: str = "MOVEMENT"
     spectrogram_channel: str = "EEG_L"
