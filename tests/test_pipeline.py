@@ -59,6 +59,39 @@ def test_slice_edge_windows_returns_first_and_last_segments() -> None:
     np.testing.assert_array_equal(end.timestamps, ts.timestamps[-expected:])
 
 
+def test_slice_edge_windows_overlaps_when_recording_shorter_than_two_windows() -> None:
+    ts = _make_recording(n=256 * 60 * 15)
+    start, end = slice_edge_windows(ts, 10.0)
+
+    overlap = np.intersect1d(start.timestamps, end.timestamps)
+    assert overlap.size == 256 * 60 * 5
+
+
+def test_edge_window_sample_count_raises_without_sample_rate() -> None:
+    ts = _make_recording()
+    ts = TimeSeries(
+        values=ts.values,
+        timestamps=ts.timestamps,
+        channel_names=ts.channel_names,
+        units=ts.units,
+        sample_rate=None,
+    )
+    with pytest.raises(ValueError, match="sample_rate"):
+        edge_window_sample_count(ts, 10.0)
+
+
+@pytest.mark.parametrize("edge_minutes", [0.0, -1.0])
+def test_edge_window_sample_count_raises_for_non_positive_minutes(edge_minutes: float) -> None:
+    with pytest.raises(ValueError, match="edge_minutes must be positive"):
+        edge_window_sample_count(_make_recording(), edge_minutes)
+
+
+def test_slice_edge_windows_raises_on_empty_recording() -> None:
+    ts = _make_recording(n=0)
+    with pytest.raises(ValueError, match="no samples"):
+        slice_edge_windows(ts, 10.0)
+
+
 def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
     model_path = tmp_path / "model.onnx"
     model_path.write_bytes(b"onnx")

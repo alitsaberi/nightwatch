@@ -119,3 +119,60 @@ def test_compute_metrics_eye_movement_counts() -> None:
     assert metrics["start"]["primitive_count"] == 1
     assert metrics["start"]["sequence_label_histogram"] == {"LR": 1, "RL": 1}
     assert metrics["start"]["sequence_rate_per_minute"] > 0
+    assert metrics["end"]["sequence_count"] == 2
+    assert metrics["end"]["primitive_rate_per_minute"] == pytest.approx(
+        metrics["end"]["primitive_count"] / (metrics["end"]["duration_seconds"] / 60.0)
+    )
+
+
+def test_compute_metrics_waso_after_sleep_onset() -> None:
+    result = _make_result()
+    result.hypnogram = Epochs(
+        labels=np.array(["W", "N2", "W", "N3", "R"], dtype=object),
+        period_length=30_000_000_000,
+        onset=int(result.recording.timestamps[0]),
+    )
+    sleep = compute_metrics(result)["sleep"]
+
+    assert sleep["sol_minutes"] == pytest.approx(0.5)
+    assert sleep["waso_minutes"] == pytest.approx(0.5)
+    assert sleep["tst_minutes"] == pytest.approx(1.5)
+
+
+def test_compute_metrics_binary_usability_labels() -> None:
+    result = _make_result()
+    result.config = AnalysisConfig(
+        recording_path="/tmp/recording",
+        model_path="/tmp/model.onnx",
+        usability_model="binary",
+    )
+    result.usability_scores = TimeSeries(
+        values=np.array([[0, 1], [1, 0], [0, 0]], dtype=np.float64),
+        timestamps=result.recording.timestamps[:3],
+        channel_names=("usability_left", "usability_right"),
+        units=("1", "1"),
+        sample_rate=1.0,
+    )
+    artifacts = compute_metrics(result)["artifacts"]
+
+    assert artifacts["left"]["Usable"] == pytest.approx(100.0 * 2 / 3)
+    assert artifacts["right"]["Not Usable"] == pytest.approx(100.0 / 3)
+    assert artifacts["usable_epoch_pct_left"] == pytest.approx(100.0 * 2 / 3)
+    assert artifacts["usable_epoch_pct_right"] == pytest.approx(100.0 * 2 / 3)
+
+
+def test_compute_metrics_empty_edge_events() -> None:
+    result = _make_result()
+    empty_window = result.recording[:256]
+    empty_edge = EdgeEyeMovementResult(window=empty_window, sequences=[], primitives=[])
+    result.edge_start = empty_edge
+    result.edge_end = empty_edge
+
+    edge = compute_metrics(result)["eye_movement"]["start"]
+
+    assert edge["sequence_count"] == 0
+    assert edge["primitive_count"] == 0
+    assert edge["sequence_rate_per_minute"] == 0.0
+    assert edge["primitive_rate_per_minute"] == 0.0
+    assert edge["sequence_label_histogram"] == {}
+    assert edge["primitive_label_histogram"] == {}
