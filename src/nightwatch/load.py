@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -14,14 +15,6 @@ from somnio.transforms.resample import apply_resample
 
 from nightwatch.config import AnalysisConfig
 
-ZMAX_DEFAULT_STEMS: Final[tuple[str, ...]] = (
-    "EEG L",
-    "EEG R",
-    "dX",
-    "dY",
-    "dZ",
-)
-ZMAX_OPTIONAL_STEMS: Final[tuple[str, ...]] = ("NOISE",)
 ZMAX_STEM_ALIASES: Final[dict[str, str]] = {
     "EEG L": "EEG_L",
     "EEG R": "EEG_R",
@@ -32,13 +25,17 @@ ZMAX_STEM_ALIASES: Final[dict[str, str]] = {
 ZMAX_ACC_CHANNELS: Final[tuple[str, str, str]] = ("ACC_X", "ACC_Y", "ACC_Z")
 
 
+@dataclass(frozen=True)
+class LoadedRecording:
+    """A loaded recording and the channel names read from disk."""
+
+    timeseries: TimeSeries
+    raw_channel_names: tuple[str, ...]
+
+
 def zmax_stems_for(path: Path) -> list[str]:
-    """Return ZMax EDF stems to load, including optional channels when present."""
-    stems = list(ZMAX_DEFAULT_STEMS)
-    for stem in ZMAX_OPTIONAL_STEMS:
-        if (path / f"{stem}.edf").is_file():
-            stems.append(stem)
-    return stems
+    """Return sorted stems of every ``*.edf`` file in a ZMax recording directory."""
+    return sorted(p.stem for p in path.glob("*.edf"))
 
 
 def append_channel(
@@ -103,7 +100,7 @@ def load_zmax_recording(
     path: Path | str,
     *,
     movement: str = "MOVEMENT",
-) -> TimeSeries:
+) -> LoadedRecording:
     """Load a ZMax multi-EDF directory with aliases and derived movement."""
     root = Path(path)
     if not root.is_dir():
@@ -115,11 +112,15 @@ def load_zmax_recording(
         stem_aliases=ZMAX_STEM_ALIASES,
         verbose="ERROR",
     )
+    raw_channel_names = tuple(ts.channel_names)
     ts = derive_movement(ts, movement=movement)
-    return _ensure_usability_sample_rate(ts)
+    return LoadedRecording(
+        timeseries=_ensure_usability_sample_rate(ts),
+        raw_channel_names=raw_channel_names,
+    )
 
 
-def load_recording(config: AnalysisConfig) -> TimeSeries:
+def load_recording(config: AnalysisConfig) -> LoadedRecording:
     """Load a recording and return a somnio TimeSeries."""
     path = config.recording_path
     if not path.exists():

@@ -14,7 +14,7 @@ from somnio.tasks.eeg_usability.defaults import SAMPLE_RATE_HZ
 
 from nightwatch.config import AnalysisConfig
 from nightwatch.load import (
-    ZMAX_DEFAULT_STEMS,
+    LoadedRecording,
     append_channel,
     derive_movement,
     load_recording,
@@ -50,15 +50,15 @@ def _make_ts(
     )
 
 
-def test_zmax_stems_for_includes_noise_when_present(tmp_path: Path) -> None:
+def test_zmax_stems_for_discovers_all_edf_files(tmp_path: Path) -> None:
     root = tmp_path / "rec"
     root.mkdir()
-    for stem in ZMAX_DEFAULT_STEMS:
+    for stem in ("EEG L", "EEG R", "dX", "dY", "dZ"):
         (root / f"{stem}.edf").touch()
-    assert zmax_stems_for(root) == list(ZMAX_DEFAULT_STEMS)
+    assert zmax_stems_for(root) == ["EEG L", "EEG R", "dX", "dY", "dZ"]
 
     (root / "NOISE.edf").touch()
-    assert zmax_stems_for(root) == [*ZMAX_DEFAULT_STEMS, "NOISE"]
+    assert zmax_stems_for(root) == ["EEG L", "EEG R", "NOISE", "dX", "dY", "dZ"]
 
 
 def test_derive_movement_appends_magnitude() -> None:
@@ -93,9 +93,10 @@ def test_load_zmax_recording_derives_movement_and_resamples(tmp_path: Path) -> N
         out = load_zmax_recording(tmp_path)
 
     read_mock.assert_called_once()
-    assert "MOVEMENT" in out.channel_names
-    assert out.sample_rate == SAMPLE_RATE_HZ
-    assert out.n_samples > base_ts.n_samples
+    assert "MOVEMENT" in out.timeseries.channel_names
+    assert out.raw_channel_names == base_ts.channel_names
+    assert out.timeseries.sample_rate == SAMPLE_RATE_HZ
+    assert out.timeseries.n_samples > base_ts.n_samples
 
 
 def test_load_zmax_recording_keeps_256_hz_without_resampling(tmp_path: Path) -> None:
@@ -107,8 +108,8 @@ def test_load_zmax_recording_keeps_256_hz_without_resampling(tmp_path: Path) -> 
     with patch("nightwatch.load.read_zmax_multi", return_value=base_ts):
         out = load_zmax_recording(tmp_path)
 
-    assert out.sample_rate == SAMPLE_RATE_HZ
-    assert out.n_samples == base_ts.n_samples
+    assert out.timeseries.sample_rate == SAMPLE_RATE_HZ
+    assert out.timeseries.n_samples == base_ts.n_samples
 
 
 def test_load_recording_dispatches_zmax(tmp_path: Path) -> None:
@@ -118,7 +119,10 @@ def test_load_recording_dispatches_zmax(tmp_path: Path) -> None:
         recording_path=recording,
         model_path=tmp_path / "model.onnx",
     )
-    expected = _make_ts(channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z", "MOVEMENT"))
+    expected = LoadedRecording(
+        timeseries=_make_ts(channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z", "MOVEMENT")),
+        raw_channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z"),
+    )
 
     with patch("nightwatch.load.load_zmax_recording", return_value=expected) as load_mock:
         out = load_recording(config)

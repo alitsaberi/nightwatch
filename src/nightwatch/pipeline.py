@@ -33,6 +33,7 @@ class AnalysisResult:
 
     config: AnalysisConfig
     recording: TimeSeries
+    raw_channel_names: tuple[str, ...]
     hypnodensity: TimeSeries
     hypnogram: Epochs
     usability_scores: TimeSeries
@@ -130,7 +131,8 @@ def run_analysis(config: AnalysisConfig) -> AnalysisResult:
     if not config.model_path.is_file():
         raise FileNotFoundError(config.model_path)
 
-    recording = load_recording(config)
+    loaded = load_recording(config)
+    recording = loaded.timeseries
 
     sleep_model = OnnxSleepScoringModel.load(config.model_path)
     sleep_ts = _prepare_sleep_scoring_timeseries(
@@ -178,6 +180,7 @@ def run_analysis(config: AnalysisConfig) -> AnalysisResult:
     return AnalysisResult(
         config=config,
         recording=recording,
+        raw_channel_names=loaded.raw_channel_names,
         hypnodensity=hypnodensity,
         hypnogram=hypnogram,
         usability_scores=usability_scores,

@@ -63,6 +63,7 @@ def _make_result() -> AnalysisResult:
     return AnalysisResult(
         config=config,
         recording=recording,
+        raw_channel_names=("EEG_L", "EEG_R"),
         hypnodensity=hypnodensity,
         hypnogram=hypnogram,
         usability_scores=usability,

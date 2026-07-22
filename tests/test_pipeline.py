@@ -12,6 +12,7 @@ import pytest
 from somnio.data import Epochs, Event, TimeSeries
 
 from nightwatch.config import AnalysisConfig
+from nightwatch.load import LoadedRecording
 from nightwatch.pipeline import (
     AnalysisResult,
     EdgeEyeMovementResult,
@@ -152,8 +153,13 @@ def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
     mock_sleep_model.metadata.n_channels = 2
     mock_sleep_model.metadata.sample_rate_hz = 256.0
 
+    loaded = LoadedRecording(
+        timeseries=recording,
+        raw_channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z"),
+    )
+
     with (
-        patch("nightwatch.pipeline.load_recording", return_value=recording) as load_mock,
+        patch("nightwatch.pipeline.load_recording", return_value=loaded) as load_mock,
         patch(
             "nightwatch.pipeline.OnnxSleepScoringModel.load",
             return_value=mock_sleep_model,
@@ -183,6 +189,7 @@ def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
 
     assert isinstance(result, AnalysisResult)
     assert result.recording is recording
+    assert result.raw_channel_names == loaded.raw_channel_names
     assert result.hypnodensity is hypnodensity
     assert result.hypnogram is hypnogram
     assert result.usability_scores is usability

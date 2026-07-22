@@ -201,7 +201,7 @@ def compute_metrics(result: AnalysisResult) -> dict[str, Any]:
             "sample_rate_hz": recording.sample_rate,
             "start": _ns_to_datetime(start_ns).isoformat(),
             "end": _ns_to_datetime(end_ns).isoformat(),
-            "channels": list(recording.channel_names),
+            "channels": list(result.raw_channel_names),
         },
         "artifacts": _compute_artifact_metrics(result),
         "sleep": _compute_sleep_metrics(result.hypnogram),

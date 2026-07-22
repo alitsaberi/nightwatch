@@ -68,6 +68,7 @@ def _make_result() -> AnalysisResult:
     return AnalysisResult(
         config=config,
         recording=recording,
+        raw_channel_names=("EEG_L", "EEG_R"),
         hypnodensity=hypnodensity,
         hypnogram=hypnogram,
         usability_scores=usability,
@@ -86,7 +87,7 @@ def test_compute_metrics_recording_summary() -> None:
     assert metrics["recording"]["sample_rate_hz"] == 256.0
     assert metrics["recording"]["duration_seconds"] == pytest.approx(120.0, rel=1e-3)
     assert metrics["recording"]["duration_hms"] == "0:02:00"
-    assert metrics["recording"]["channels"] == ["EEG_L", "EEG_R", "MOVEMENT"]
+    assert metrics["recording"]["channels"] == ["EEG_L", "EEG_R"]
 
 
 def test_compute_metrics_sleep_stats() -> None:
