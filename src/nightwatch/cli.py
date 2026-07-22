@@ -22,6 +22,11 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+def _fail(message: str) -> None:
+    typer.secho(message, fg=typer.colors.RED, err=True)
+    raise typer.Exit(code=1)
+
+
 @app.callback()
 def main(
     version: bool = typer.Option(
@@ -48,9 +53,20 @@ def run(
     output: Path = typer.Option(Path("report.html"), help="Output HTML report path."),
 ) -> None:
     """Analyze a recording and write an HTML report."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+
     from nightwatch.config import AnalysisConfig
+    from nightwatch.metrics import compute_metrics
     from nightwatch.pipeline import run_analysis
+    from nightwatch.plots import build_plots
     from nightwatch.report import render
+
+    if not recording.exists():
+        _fail(f"Recording path does not exist: {recording}")
+    if not model.is_file():
+        _fail(f"Sleep-scoring model not found: {model}")
 
     config = AnalysisConfig(
         recording_path=recording,
@@ -60,7 +76,18 @@ def run(
         usability_model=usability_model,
         output_path=output,
     )
-    result = run_analysis(config)
-    html = render({}, {})
+
+    try:
+        result = run_analysis(config)
+    except FileNotFoundError as exc:
+        _fail(str(exc))
+    except ValueError as exc:
+        _fail(str(exc))
+
+    metrics = compute_metrics(result)
+    plots = build_plots(result)
+    html = render(metrics, plots)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(html, encoding="utf-8")
     typer.echo(f"Report written to {output}")
