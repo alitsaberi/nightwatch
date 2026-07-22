@@ -167,20 +167,13 @@ def _event_label_histogram(events: list[Any]) -> dict[str, int]:
 
 def _compute_edge_eye_movement_metrics(edge: EdgeEyeMovementResult) -> dict[str, Any]:
     duration_seconds = edge.window.duration.total_seconds()
-    duration_minutes = duration_seconds / 60.0 if duration_seconds else 0.0
     sequence_count = len(edge.sequences)
-
-    def rate_per_minute(count: int) -> float:
-        if duration_minutes <= 0:
-            return 0.0
-        return count / duration_minutes
 
     return {
         "duration_seconds": duration_seconds,
         "duration_hms": _format_duration_hms(duration_seconds),
         "has_matches": sequence_count > 0,
         "sequence_count": sequence_count,
-        "sequence_rate_per_minute": rate_per_minute(sequence_count),
         "sequence_label_histogram": _event_label_histogram(edge.sequences),
     }
 

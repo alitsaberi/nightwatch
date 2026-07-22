@@ -206,5 +206,4 @@ def test_compute_metrics_empty_edge_events() -> None:
 
     assert edge["sequence_count"] == 0
     assert edge["has_matches"] is False
-    assert edge["sequence_rate_per_minute"] == 0.0
     assert edge["sequence_label_histogram"] == {}

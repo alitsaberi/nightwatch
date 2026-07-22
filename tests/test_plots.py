@@ -114,11 +114,47 @@ def test_build_plots_returns_named_figures() -> None:
         "sleep_scoring",
         "eye_movements",
     }
+    # No matched sequences in fixture → overview panels only.
     assert len(plots["eye_movements"].axes) == 2
     for fig in plots.values():
         assert isinstance(fig, Figure)
         assert fig._suptitle is None
         plt_close(fig)
+
+
+def test_eye_movement_plot_includes_zoom_panels_for_matches() -> None:
+    result = _make_result()
+    window = result.recording[:512]
+    result.edge_start = EdgeEyeMovementResult(
+        window=window,
+        sequences=[
+            Event(
+                onset=int(window.timestamps[100]),
+                duration=300_000_000,
+                type="eye_movement",
+                label="LRL",
+            ),
+            Event(
+                onset=int(window.timestamps[300]),
+                duration=400_000_000,
+                type="eye_movement",
+                label="RLR",
+            ),
+        ],
+        primitives=[],
+    )
+    result.edge_end = EdgeEyeMovementResult(window=window, sequences=[], primitives=[])
+
+    fig = build_plots(result)["eye_movements"]
+    visible = [ax for ax in fig.axes if ax.get_visible()]
+    titles = [ax.get_title() for ax in visible]
+    assert any(t.startswith("First edge window") for t in titles)
+    assert any(t.startswith("Last edge window") for t in titles)
+    assert any("LRL" in t for t in titles)
+    assert any("RLR" in t for t in titles)
+    # Overview + two zoom cards + last overview.
+    assert len(visible) == 4
+    plt_close(fig)
 
 
 def test_full_recording_plots_share_time_axis() -> None:

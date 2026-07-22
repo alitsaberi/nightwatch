@@ -384,57 +384,318 @@ def plot_channel_overview(
     return fig
 
 
-def _plot_edge_overlay(
+ZOOM_PAD_S = 0.5
+MAX_ZOOM_PANELS_PER_EDGE = 8
+ZOOM_GRID_COLS = 2
+EEG_LEFT_COLOR = "#2563eb"
+EEG_RIGHT_COLOR = "#ea580c"
+MATCH_HIGHLIGHT_COLOR = "#dc2626"
+ZOOM_FACE_COLOR = "#f8fafc"
+
+
+def _edge_channel_signals(
+    edge: EdgeEyeMovementResult,
+    left_channel: str,
+    right_channel: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    window = edge.window
+    if window.sample_rate is None or window.n_samples == 0:
+        return None
+    if left_channel not in window.channel_index_map or right_channel not in window.channel_index_map:
+        return None
+    times_s = (window.timestamps.astype(np.float64) - window.timestamps[0]) / 1e9
+    left = np.asarray(window.values[:, window.channel_index_map[left_channel]]).squeeze()
+    right = np.asarray(window.values[:, window.channel_index_map[right_channel]]).squeeze()
+    return times_s, left, right
+
+
+def _signal_ylim(*series: np.ndarray, margin: float = 0.12) -> tuple[float, float]:
+    data = np.concatenate([np.asarray(s, dtype=np.float64).ravel() for s in series if s.size])
+    if data.size == 0:
+        return -1.0, 1.0
+    lo, hi = np.percentile(data, [2, 98])
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        lo = float(np.min(data))
+        hi = float(np.max(data))
+        if hi <= lo:
+            return lo - 1.0, hi + 1.0
+    pad = (hi - lo) * margin
+    return float(lo - pad), float(hi + pad)
+
+
+def _style_trace_axis(ax: plt.Axes, *, zoom: bool = False) -> None:
+    ax.set_facecolor(ZOOM_FACE_COLOR if zoom else "white")
+    ax.grid(True, axis="both", alpha=0.25, linewidth=0.6)
+    for spine in ax.spines.values():
+        spine.set_color("#cbd5e1")
+        spine.set_linewidth(0.8)
+    ax.tick_params(labelsize=8, colors="#475569")
+
+
+def _draw_eeg_overlay(
+    ax: plt.Axes,
+    times_s: np.ndarray,
+    left: np.ndarray,
+    right: np.ndarray,
+    *,
+    left_channel: str,
+    right_channel: str,
+    downsample: bool,
+) -> None:
+    if downsample:
+        plot_times, plot_left = _downsample_series(times_s, left)
+        _, plot_right = _downsample_series(times_s, right)
+        lw = 0.55
+    else:
+        plot_times, plot_left, plot_right = times_s, left, right
+        lw = 1.15
+    ax.plot(plot_times, plot_left, color=EEG_LEFT_COLOR, linewidth=lw, alpha=0.95, label=left_channel)
+    ax.plot(plot_times, plot_right, color=EEG_RIGHT_COLOR, linewidth=lw, alpha=0.95, label=right_channel)
+
+
+def _overlay_events(
+    ax: plt.Axes,
+    events: list[Event],
+    window_start_ns: int,
+    *,
+    color: str,
+    label: str | None = None,
+    alpha: float = 0.22,
+) -> None:
+    if not events:
+        return
+    labeled = False
+    for event in events:
+        start_s = (event.onset - window_start_ns) / 1e9
+        end_s = start_s + event.duration / 1e9
+        ax.axvspan(
+            start_s,
+            end_s,
+            color=color,
+            alpha=alpha,
+            linewidth=0,
+            label=label if (label and not labeled) else None,
+            zorder=0,
+        )
+        labeled = True
+
+
+def _zoom_limits_for_event(
+    event: Event,
+    window_start_ns: int,
+    window_duration_s: float,
+    *,
+    pad_s: float = ZOOM_PAD_S,
+) -> tuple[float, float]:
+    start_s = (event.onset - window_start_ns) / 1e9
+    end_s = start_s + event.duration / 1e9
+    return max(0.0, start_s - pad_s), min(window_duration_s, end_s + pad_s)
+
+
+def _plot_edge_overview(
     ax: plt.Axes,
     edge: EdgeEyeMovementResult,
     *,
     left_channel: str,
     right_channel: str,
-    panel_title: str,
+    section_title: str,
 ) -> None:
-    """Overlay left/right EEG for one edge window and highlight matched sequences."""
-    window = edge.window
-    ax.set_title(panel_title)
-    if window.sample_rate is None or window.n_samples == 0:
+    signals = _edge_channel_signals(edge, left_channel, right_channel)
+    ax.set_title(section_title, fontsize=11, fontweight="bold", color="#0f172a", pad=8)
+    if signals is None:
         ax.text(0.5, 0.5, "No edge-window data", ha="center", va="center", transform=ax.transAxes)
+        _style_trace_axis(ax)
         return
 
-    times_s = (window.timestamps.astype(np.float64) - window.timestamps[0]) / 1e9
-    missing = [
-        channel
-        for channel in (left_channel, right_channel)
-        if channel not in window.channel_index_map
-    ]
-    if missing:
-        ax.text(
-            0.5,
-            0.5,
-            f"Missing channels: {', '.join(missing)}",
-            ha="center",
-            va="center",
-            transform=ax.transAxes,
-        )
-        return
-
-    left_idx = window.channel_index_map[left_channel]
-    right_idx = window.channel_index_map[right_channel]
-    left_signal = np.asarray(window.values[:, left_idx]).squeeze()
-    right_signal = np.asarray(window.values[:, right_idx]).squeeze()
-    plot_times, plot_left = _downsample_series(times_s, left_signal)
-    _, plot_right = _downsample_series(times_s, right_signal)
-
-    ax.plot(plot_times, plot_left, color="C0", linewidth=0.6, alpha=0.85, label=left_channel)
-    ax.plot(plot_times, plot_right, color="C1", linewidth=0.6, alpha=0.85, label=right_channel)
+    times_s, left, right = signals
+    _draw_eeg_overlay(
+        ax,
+        times_s,
+        left,
+        right,
+        left_channel=left_channel,
+        right_channel=right_channel,
+        downsample=True,
+    )
+    window_start_ns = int(edge.window.timestamps[0])
     _overlay_events(
         ax,
         edge.sequences,
-        int(window.timestamps[0]),
-        color="crimson",
-        label="Matched sequences",
+        window_start_ns,
+        color=MATCH_HIGHLIGHT_COLOR,
+        label="Matched",
+        alpha=0.2,
     )
-    ax.set_ylabel("µV")
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="upper right", fontsize="small")
+
+    # Number markers at each match onset for cross-reference with zoom cards.
+    for index, event in enumerate(edge.sequences[:MAX_ZOOM_PANELS_PER_EDGE], start=1):
+        onset_s = (event.onset - window_start_ns) / 1e9
+        ax.axvline(onset_s, color=MATCH_HIGHLIGHT_COLOR, linewidth=0.9, alpha=0.7, zorder=3)
+        ymax = ax.get_ylim()[1]
+        ax.text(
+            onset_s,
+            ymax,
+            str(index),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            fontweight="bold",
+            color=MATCH_HIGHLIGHT_COLOR,
+            clip_on=False,
+        )
+
+    ax.set_ylabel("µV", fontsize=9)
+    ax.set_xlabel("Time (s)", fontsize=9)
+    _style_trace_axis(ax, zoom=False)
+    ax.legend(loc="upper right", fontsize=8, frameon=False, ncols=3)
+
+
+def _plot_sequence_zoom(
+    ax: plt.Axes,
+    edge: EdgeEyeMovementResult,
+    event: Event,
+    *,
+    index: int,
+    left_channel: str,
+    right_channel: str,
+    ylim: tuple[float, float] | None,
+) -> None:
+    signals = _edge_channel_signals(edge, left_channel, right_channel)
+    label = str(event.label) if event.label is not None else "?"
+    if signals is None:
+        ax.set_title(f"{index}. {label}", fontsize=10)
+        ax.text(0.5, 0.5, "Unavailable", ha="center", va="center", transform=ax.transAxes)
+        _style_trace_axis(ax, zoom=True)
+        return
+
+    times_s, left, right = signals
+    window_start_ns = int(edge.window.timestamps[0])
+    window_duration_s = edge.window.duration.total_seconds()
+    x0, x1 = _zoom_limits_for_event(event, window_start_ns, window_duration_s)
+    mask = (times_s >= x0) & (times_s <= x1)
+    onset_s = (event.onset - window_start_ns) / 1e9
+    end_s = onset_s + event.duration / 1e9
+    duration_ms = event.duration / 1e6
+
+    _draw_eeg_overlay(
+        ax,
+        times_s[mask],
+        left[mask],
+        right[mask],
+        left_channel=left_channel,
+        right_channel=right_channel,
+        downsample=False,
+    )
+    ax.axvspan(onset_s, end_s, color=MATCH_HIGHLIGHT_COLOR, alpha=0.16, linewidth=0, zorder=0)
+    ax.axvline(onset_s, color=MATCH_HIGHLIGHT_COLOR, linewidth=1.0, alpha=0.85, zorder=3)
+    ax.axvline(end_s, color=MATCH_HIGHLIGHT_COLOR, linewidth=1.0, alpha=0.55, linestyle="--", zorder=3)
+
+    ax.set_xlim(x0, x1)
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+
+    ax.set_title(
+        f"{index}.  {label}",
+        fontsize=10,
+        fontweight="bold",
+        color="#0f172a",
+        pad=6,
+    )
+    ax.text(
+        0.99,
+        0.96,
+        f"@{onset_s:.2f}s · {duration_ms:.0f} ms",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8,
+        color="#64748b",
+    )
+    ax.set_xlabel("Time (s)", fontsize=8)
+    ax.set_ylabel("µV", fontsize=8)
+    _style_trace_axis(ax, zoom=True)
+
+
+def _add_edge_section(
+    fig: Figure,
+    outer: object,
+    edge: EdgeEyeMovementResult,
+    *,
+    section_title: str,
+    left_channel: str,
+    right_channel: str,
+) -> None:
+    from matplotlib.gridspec import GridSpecFromSubplotSpec
+
+    sequences = list(edge.sequences[:MAX_ZOOM_PANELS_PER_EDGE])
+    n_zooms = len(sequences)
+
+    if n_zooms == 0:
+        overview_ax = fig.add_subplot(outer)
+        _plot_edge_overview(
+            overview_ax,
+            edge,
+            left_channel=left_channel,
+            right_channel=right_channel,
+            section_title=section_title,
+        )
+        return
+
+    zoom_rows = int(np.ceil(n_zooms / ZOOM_GRID_COLS))
+    section = GridSpecFromSubplotSpec(
+        2,
+        1,
+        subplot_spec=outer,
+        height_ratios=[1.45, zoom_rows],
+        hspace=0.38,
+    )
+    overview_ax = fig.add_subplot(section[0])
+    _plot_edge_overview(
+        overview_ax,
+        edge,
+        left_channel=left_channel,
+        right_channel=right_channel,
+        section_title=section_title,
+    )
+
+    # Shared y-limits across zooms in this section for easier comparison.
+    signals = _edge_channel_signals(edge, left_channel, right_channel)
+    shared_ylim: tuple[float, float] | None = None
+    if signals is not None:
+        times_s, left, right = signals
+        window_start_ns = int(edge.window.timestamps[0])
+        window_duration_s = edge.window.duration.total_seconds()
+        chunks: list[np.ndarray] = []
+        for event in sequences:
+            x0, x1 = _zoom_limits_for_event(event, window_start_ns, window_duration_s)
+            mask = (times_s >= x0) & (times_s <= x1)
+            chunks.extend([left[mask], right[mask]])
+        shared_ylim = _signal_ylim(*chunks)
+
+    zoom_grid = GridSpecFromSubplotSpec(
+        zoom_rows,
+        ZOOM_GRID_COLS,
+        subplot_spec=section[1],
+        wspace=0.28,
+        hspace=0.5,
+    )
+    for index, event in enumerate(sequences, start=1):
+        row, col = divmod(index - 1, ZOOM_GRID_COLS)
+        ax = fig.add_subplot(zoom_grid[row, col])
+        _plot_sequence_zoom(
+            ax,
+            edge,
+            event,
+            index=index,
+            left_channel=left_channel,
+            right_channel=right_channel,
+            ylim=shared_ylim,
+        )
+
+    for filler in range(n_zooms, zoom_rows * ZOOM_GRID_COLS):
+        row, col = divmod(filler, ZOOM_GRID_COLS)
+        ax = fig.add_subplot(zoom_grid[row, col])
+        ax.set_visible(False)
 
 
 def plot_eye_movements(
@@ -444,51 +705,38 @@ def plot_eye_movements(
     left_channel: str,
     right_channel: str,
 ) -> Figure:
-    """Two-panel eye-movement block: first and last edge windows, channels overlaid."""
-    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=False)
-    _plot_edge_overlay(
-        axes[0],
+    """Eye-movement block: edge overviews with a card grid of zoomed matches."""
+    from matplotlib.gridspec import GridSpec
+
+    n_start = min(len(edge_start.sequences), MAX_ZOOM_PANELS_PER_EDGE)
+    n_end = min(len(edge_end.sequences), MAX_ZOOM_PANELS_PER_EDGE)
+    start_zoom_rows = int(np.ceil(n_start / ZOOM_GRID_COLS)) if n_start else 0
+    end_zoom_rows = int(np.ceil(n_end / ZOOM_GRID_COLS)) if n_end else 0
+    start_weight = 1.6 + 1.05 * start_zoom_rows
+    end_weight = 1.6 + 1.05 * end_zoom_rows
+    fig_h = 2.4 * start_weight + 2.4 * end_weight
+
+    fig = plt.figure(figsize=(12.5, max(6.5, fig_h)))
+    outer = GridSpec(2, 1, figure=fig, height_ratios=[start_weight, end_weight], hspace=0.3)
+
+    _add_edge_section(
+        fig,
+        outer[0],
         edge_start,
+        section_title="First edge window",
         left_channel=left_channel,
         right_channel=right_channel,
-        panel_title="First edge window",
     )
-    _plot_edge_overlay(
-        axes[1],
+    _add_edge_section(
+        fig,
+        outer[1],
         edge_end,
+        section_title="Last edge window",
         left_channel=left_channel,
         right_channel=right_channel,
-        panel_title="Last edge window",
     )
-    axes[0].set_xlabel("Time (s)")
-    axes[1].set_xlabel("Time (s)")
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.07, right=0.98, top=0.95, bottom=0.05)
     return fig
-
-
-def _overlay_events(
-    ax: plt.Axes,
-    events: list[Event],
-    window_start_ns: int,
-    *,
-    color: str,
-    label: str,
-) -> None:
-    if not events:
-        return
-
-    labeled = False
-    for event in events:
-        start_s = (event.onset - window_start_ns) / 1e9
-        end_s = start_s + event.duration / 1e9
-        ax.axvspan(
-            start_s,
-            end_s,
-            color=color,
-            alpha=0.25,
-            label=label if not labeled else None,
-        )
-        labeled = True
 
 
 def build_plots(result: AnalysisResult) -> dict[str, Figure]:

@@ -134,11 +134,7 @@ def _render_edge_table(edge: dict[str, Any], title: str) -> None:
     st.markdown(f"**{title}**")
     col1, col2 = st.columns(2)
     col1.metric("Window duration", edge["duration_hms"])
-    col2.metric(
-        "Matched sequences",
-        str(edge["sequence_count"]),
-        delta=f"{_fmt(edge['sequence_rate_per_minute'], 2)} / min",
-    )
+    col2.metric("Matched sequences", str(edge["sequence_count"]))
 
     seq_hist: dict[str, int] = edge.get("sequence_label_histogram", {})
     if seq_hist:
