@@ -99,7 +99,7 @@ def test_plot_channel_overview_returns_figure() -> None:
         "EEG_L",
         result.usability_scores,
         0,
-        "default",
+        "lite",
     )
     assert isinstance(fig, Figure)
     assert len(fig.axes) == 3

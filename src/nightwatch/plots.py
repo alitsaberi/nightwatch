@@ -74,7 +74,7 @@ def _stage_y_map(labels: tuple[str, ...] | list[str]) -> dict[str, int]:
 
 
 def _usability_label_map(model_key: str) -> dict[int, str]:
-    if model_key in {"binary", "lite_binary"}:
+    if model_key == "lite_binary":
         return USABILITY_LABELS_BINARY
     return USABILITY_LABELS_MULTICLASS
 

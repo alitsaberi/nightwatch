@@ -18,7 +18,7 @@ class AnalysisConfig(BaseModel):
     format: Literal["zmax"] = "zmax"
     model_path: Path
     edge_minutes: float = Field(default=30.0, gt=0)
-    usability_model: Literal["default", "lite", "binary", "lite_binary"] = "lite"
+    usability_model: Literal["lite", "lite_binary"] = Field(default="lite")
     eye_movement_pattern: str = Field(
         default=DEFAULT_EYE_MOVEMENT_PATTERN,
         min_length=1,

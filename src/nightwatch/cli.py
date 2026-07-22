@@ -46,7 +46,7 @@ def run(
     format: Literal["zmax"] = typer.Option("zmax", help="Input recording format."),
     model: Path = typer.Option(..., help="Path to sleep-scoring ONNX model."),
     edge_minutes: float = typer.Option(30.0, help="Minutes at start/end for eye-movement detection."),
-    usability_model: Literal["default", "lite", "binary", "lite_binary"] = typer.Option(
+    usability_model: Literal["lite", "lite_binary"] = typer.Option(
         "lite",
         help="EEG usability model variant.",
     ),

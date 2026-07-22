@@ -178,7 +178,7 @@ def test_compute_metrics_binary_usability_labels() -> None:
     result.config = AnalysisConfig(
         recording_path="/tmp/recording",
         model_path="/tmp/model.onnx",
-        usability_model="binary",
+        usability_model="lite_binary",
     )
     result.usability_scores = TimeSeries(
         values=np.array([[0, 1], [1, 0], [0, 0]], dtype=np.float64),

@@ -24,7 +24,7 @@ from nightwatch.pipeline import AnalysisResult, run_analysis
 from nightwatch.plots import build_plots
 from nightwatch.report import plot_display_order, plot_title, render
 
-UsabilityModel = Literal["default", "lite", "binary", "lite_binary"]
+UsabilityModel = Literal["lite", "lite_binary"]
 
 
 def _pct(value: object, decimals: int = 1) -> str:
@@ -431,7 +431,7 @@ if st.session_state.get("model_path_error"):
 edge_minutes = st.sidebar.number_input("Edge minutes", min_value=1.0, value=30.0, step=1.0)
 usability_model = st.sidebar.selectbox(
     "Usability model",
-    options=["lite", "default", "binary", "lite_binary"],
+    options=["lite", "lite_binary"],
 )
 eye_movement_pattern = st.sidebar.text_input(
     "Eye-movement sequence pattern",
