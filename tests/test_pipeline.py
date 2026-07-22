@@ -15,6 +15,7 @@ from nightwatch.config import AnalysisConfig
 from nightwatch.pipeline import (
     AnalysisResult,
     EdgeEyeMovementResult,
+    _detect_edge_eye_movements,
     edge_window_sample_count,
     run_analysis,
     slice_edge_windows,
@@ -90,6 +91,29 @@ def test_slice_edge_windows_raises_on_empty_recording() -> None:
     ts = _make_recording(n=0)
     with pytest.raises(ValueError, match="no samples"):
         slice_edge_windows(ts, 10.0)
+
+
+def test_detect_edge_eye_movements_passes_only_eeg_channels() -> None:
+    recording = _make_recording()
+    config = AnalysisConfig(
+        recording_path=Path("recording"),
+        model_path=Path("model.onnx"),
+    )
+
+    with patch(
+        "nightwatch.pipeline.detect_lr_eye_movements",
+        return_value=([], []),
+    ) as detect_mock:
+        result = _detect_edge_eye_movements(
+            recording,
+            config,
+            edge_minutes=10.0,
+            at_start=True,
+        )
+
+    passed_ts = detect_mock.call_args.args[0]
+    assert list(passed_ts.channel_names) == ["EEG_L", "EEG_R"]
+    assert result.window.n_samples == edge_window_sample_count(recording, 10.0)
 
 
 def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:

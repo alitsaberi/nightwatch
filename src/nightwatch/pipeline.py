@@ -104,8 +104,9 @@ def _detect_edge_eye_movements(
     """Run eye-movement detection on the first or last edge window."""
     start_window, end_window = slice_edge_windows(ts, edge_minutes)
     window = start_window if at_start else end_window
+    eeg_window = window.select_channels([config.eeg_left, config.eeg_right])
     sequences, primitives = detect_lr_eye_movements(
-        window,
+        eeg_window,
         left=config.eeg_left,
         right=config.eeg_right,
     )
