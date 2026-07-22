@@ -9,6 +9,7 @@ from typing import Final
 import numpy as np
 
 from somnio.data.timeseries import TimeSeries
+from somnio.data.units import UV, Dimension, convert_values
 from somnio.io.edf import read_zmax_multi
 from somnio.tasks.eeg_usability.defaults import SAMPLE_RATE_HZ
 from somnio.transforms.resample import apply_resample
@@ -85,6 +86,31 @@ def derive_movement(
     return append_channel(ts, movement, magnitude, "1")
 
 
+def convert_voltage_channels_to_microvolts(ts: TimeSeries) -> TimeSeries:
+    """Convert voltage channels from volts to microvolts (µV)."""
+    values = ts.values.copy()
+    new_units: list[str | object] = list(ts.units)
+    changed = False
+
+    for channel_index, unit in enumerate(ts.units):
+        if unit.dimension is not Dimension.VOLTAGE:
+            continue
+        values[:, channel_index] = convert_values(values[:, channel_index], unit, UV)
+        new_units[channel_index] = UV
+        changed = True
+
+    if not changed:
+        return ts
+
+    return TimeSeries(
+        values=values,
+        timestamps=ts.timestamps.copy(),
+        channel_names=ts.channel_names,
+        units=new_units,
+        sample_rate=ts.sample_rate,
+    )
+
+
 def _ensure_usability_sample_rate(ts: TimeSeries) -> TimeSeries:
     """Resample to 256 Hz when needed for EEG usability scoring."""
     if ts.sample_rate is None:
@@ -113,6 +139,7 @@ def load_zmax_recording(
         verbose="ERROR",
     )
     raw_channel_names = tuple(ts.channel_names)
+    ts = convert_voltage_channels_to_microvolts(ts)
     ts = derive_movement(ts, movement=movement)
     return LoadedRecording(
         timeseries=_ensure_usability_sample_rate(ts),

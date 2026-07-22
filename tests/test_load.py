@@ -10,12 +10,14 @@ import numpy as np
 import pytest
 
 from somnio.data.timeseries import TimeSeries
+from somnio.data.units import UV, V
 from somnio.tasks.eeg_usability.defaults import SAMPLE_RATE_HZ
 
 from nightwatch.config import AnalysisConfig
 from nightwatch.load import (
     LoadedRecording,
     append_channel,
+    convert_voltage_channels_to_microvolts,
     derive_movement,
     load_recording,
     load_zmax_recording,
@@ -61,6 +63,38 @@ def test_zmax_stems_for_discovers_all_edf_files(tmp_path: Path) -> None:
     assert zmax_stems_for(root) == ["EEG L", "EEG R", "NOISE", "dX", "dY", "dZ"]
 
 
+def test_convert_voltage_channels_to_microvolts() -> None:
+    ts = TimeSeries(
+        values=np.array([[0.001, 3.0], [-0.002, 4.0]], dtype=np.float64),
+        timestamps=np.array([0, 1], dtype=np.int64),
+        channel_names=("EEG_L", "ACC_X"),
+        units=(V, "m/s^2"),
+        sample_rate=256.0,
+    )
+
+    out = convert_voltage_channels_to_microvolts(ts)
+
+    np.testing.assert_allclose(out.values[:, 0], [1000.0, -2000.0])
+    np.testing.assert_allclose(out.values[:, 1], ts.values[:, 1])
+    assert out.units[0] == UV
+    assert out.units[1] == ts.units[1]
+
+
+def test_convert_voltage_channels_to_microvolts_is_idempotent() -> None:
+    ts = TimeSeries(
+        values=np.array([[50.0]], dtype=np.float64),
+        timestamps=np.array([0], dtype=np.int64),
+        channel_names=("EEG_L",),
+        units=(UV,),
+        sample_rate=256.0,
+    )
+
+    out = convert_voltage_channels_to_microvolts(ts)
+
+    np.testing.assert_allclose(out.values, ts.values)
+    assert out.units == ts.units
+
+
 def test_derive_movement_appends_magnitude() -> None:
     ts = _make_ts()
     out = derive_movement(ts)
@@ -79,6 +113,24 @@ def test_append_channel_rejects_duplicate_name() -> None:
     ts = _make_ts(channel_names=("ACC_X",))
     with pytest.raises(ValueError, match="already present"):
         append_channel(ts, "ACC_X", np.zeros(ts.n_samples), "1")
+
+
+def test_load_zmax_recording_converts_eeg_to_microvolts(tmp_path: Path) -> None:
+    base_ts = TimeSeries(
+        values=np.array([[1e-5, 0.0, 0.0, 0.0, 0.0]], dtype=np.float64),
+        timestamps=np.array([0], dtype=np.int64),
+        channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z"),
+        units=(V, V, "m/s^2", "m/s^2", "m/s^2"),
+        sample_rate=SAMPLE_RATE_HZ,
+    )
+
+    with patch("nightwatch.load.read_zmax_multi", return_value=base_ts):
+        out = load_zmax_recording(tmp_path)
+
+    assert out.timeseries.units[0] == UV
+    assert out.timeseries.units[1] == UV
+    np.testing.assert_allclose(out.timeseries.values[0, 0], 10.0)
+    np.testing.assert_allclose(out.timeseries.values[0, 1], 0.0)
 
 
 def test_load_zmax_recording_derives_movement_and_resamples(tmp_path: Path) -> None:
