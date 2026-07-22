@@ -116,27 +116,47 @@ def plot_spectrogram(recording: object, channel: str) -> Figure:
         return fig
 
     idx = recording.channel_index_map[channel]
-    signal = recording.values[:, idx]
+    signal_data = np.asarray(recording.values[:, idx]).squeeze()
     fs = float(recording.sample_rate)
 
-    nperseg = min(int(fs * 4), signal.size)
+    window_size_s = 4.0
+    min_frequency_hz = 0.0
+    max_frequency_hz = 30.0
+    nperseg = min(int(window_size_s * fs), signal_data.size)
     if nperseg < 2:
         ax.set_title(f"Spectrogram ({channel})")
         ax.text(0.5, 0.5, "Recording too short", ha="center", va="center", transform=ax.transAxes)
         fig.tight_layout()
         return fig
 
-    frequencies, times, power = spectrogram(signal, fs=fs, nperseg=nperseg, noverlap=nperseg // 2)
-    power_db = 10.0 * np.log10(np.maximum(power, 1e-12))
+    frequencies, times, power = spectrogram(
+        signal_data,
+        fs=fs,
+        nperseg=nperseg,
+        noverlap=0,
+        window="hann",
+        scaling="density",
+    )
+    power_db = 10.0 * np.log10(power + np.finfo(float).eps)
 
-    extent = (times[0] / 3600.0, times[-1] / 3600.0, frequencies[0], frequencies[-1])
+    freq_mask = np.logical_and(frequencies >= min_frequency_hz, frequencies <= max_frequency_hz)
+    frequencies = frequencies[freq_mask]
+    power_db = power_db[freq_mask, :]
+
+    extent = (
+        times[0] / 3600.0,
+        times[-1] / 3600.0,
+        float(frequencies[0]) if frequencies.size else min_frequency_hz,
+        float(frequencies[-1]) if frequencies.size else max_frequency_hz,
+    )
     mesh = ax.imshow(
         power_db,
         aspect="auto",
         origin="lower",
         extent=extent,
-        cmap="magma",
+        cmap="RdBu_r",
     )
+    ax.set_ylim(min_frequency_hz, max_frequency_hz)
     ax.set_xlabel("Time (h)")
     ax.set_ylabel("Frequency (Hz)")
     ax.set_title(f"Spectrogram ({channel})")
