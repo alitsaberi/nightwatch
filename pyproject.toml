@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Ali Saberi", email = "ali.saberi96@gmail.com" }
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.10, <3.14"
 license = { file = "LICENSE" }
 keywords = [
     "sleep",
@@ -28,7 +28,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "somnio[edf,onnx,schemas,eeg-usability,signal]",
+    "somnio[edf,eeg-usability,onnx,schemas,signal]>=0.2.0b2",
     "streamlit>=1.28",
     "typer>=0.21",
     "matplotlib>=3.8",
