@@ -17,6 +17,7 @@ from nightwatch.pipeline import (
     AnalysisResult,
     EdgeEyeMovementResult,
     _detect_edge_eye_movements,
+    _prepare_sleep_scoring_timeseries,
     edge_window_sample_count,
     run_analysis,
     slice_edge_windows,
@@ -115,6 +116,36 @@ def test_detect_edge_eye_movements_passes_only_eeg_channels() -> None:
     passed_ts = detect_mock.call_args.args[0]
     assert list(passed_ts.channel_names) == ["EEG_L", "EEG_R"]
     assert result.window.n_samples == edge_window_sample_count(recording, 10.0)
+
+
+def test_prepare_sleep_scoring_timeseries_applies_preprocessing() -> None:
+    recording = _make_recording(sample_rate=512.0)
+    config = AnalysisConfig(
+        recording_path=Path("recording"),
+        model_path=Path("model.onnx"),
+    )
+    metadata = MagicMock()
+    metadata.n_channels = 2
+    metadata.sample_rate_hz = 256.0
+
+    with (
+        patch("nightwatch.pipeline.apply_resample", side_effect=lambda ts, hz: ts) as resample_mock,
+        patch("nightwatch.pipeline.apply_fir_filter", side_effect=lambda ts, **_: ts) as filter_mock,
+        patch("nightwatch.pipeline.apply_scale", side_effect=lambda ts, **_: ts) as scale_mock,
+        patch("nightwatch.pipeline.apply_clip_iqr", side_effect=lambda ts, **_: ts) as clip_mock,
+    ):
+        result = _prepare_sleep_scoring_timeseries(recording, config, metadata)
+
+    assert list(result.channel_names) == ["EEG_L", "EEG_R"]
+    resample_mock.assert_called_once()
+    assert resample_mock.call_args.args[1] == 256.0
+    filter_mock.assert_called_once_with(
+        resample_mock.call_args.args[0],
+        low_cutoff=0.3,
+        high_cutoff=35.0,
+    )
+    scale_mock.assert_called_once_with(filter_mock.call_args.args[0], method="robust")
+    clip_mock.assert_called_once_with(scale_mock.call_args.args[0], iqr_factor=20.0)
 
 
 def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:

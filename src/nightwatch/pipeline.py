@@ -4,15 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import numpy as np
-
 from somnio.data import Epochs, Event, TimeSeries
 from somnio.tasks.eeg_usability import get_usability_scores, load_model as load_usability_model
 from somnio.tasks.eye_movement_detection import detect_lr_eye_movements
 from somnio.tasks.sleep_scoring import score_sleep_stages
 from somnio.tasks.sleep_scoring.models import OnnxSleepScoringModel
 from somnio.tasks.sleep_scoring.schema import ModelMetadata
+from somnio.transforms.clip import apply_clip_iqr
+from somnio.transforms.filter import apply_fir_filter
 from somnio.transforms.resample import apply_resample
+from somnio.transforms.scale import apply_scale
 
 from nightwatch.config import AnalysisConfig
 from nightwatch.load import load_recording
@@ -62,19 +63,21 @@ def _prepare_sleep_scoring_timeseries(
     config: AnalysisConfig,
     metadata: ModelMetadata,
 ) -> TimeSeries:
-    """Select model channels and resample to the model sample rate when needed."""
+    """Select model channels and apply sleep-scoring preprocessing."""
     channel_names = _sleep_scoring_channel_names(config, metadata)
     missing = [name for name in channel_names if name not in ts.channel_index_map]
     if missing:
         raise ValueError(f"Recording is missing sleep-scoring channels: {missing}")
 
+    if ts.sample_rate is None:
+        raise ValueError("Recording has no sample_rate metadata; cannot score sleep stages.")
+
     selected = ts.select_channels(channel_names)
     target_hz = float(metadata.sample_rate_hz)
-    if selected.sample_rate is None:
-        raise ValueError("Recording has no sample_rate metadata; cannot score sleep stages.")
-    if not np.isclose(selected.sample_rate, target_hz, rtol=0.0, atol=1e-3):
-        selected = apply_resample(selected, target_hz)
-    return selected
+    selected = apply_resample(selected, target_hz)
+    selected = apply_fir_filter(selected, low_cutoff=0.3, high_cutoff=35.0)
+    selected = apply_scale(selected, method="robust")
+    return apply_clip_iqr(selected, iqr_factor=20.0)
 
 
 def edge_window_sample_count(ts: TimeSeries, edge_minutes: float) -> int:
