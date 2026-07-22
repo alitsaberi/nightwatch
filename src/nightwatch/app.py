@@ -8,7 +8,7 @@ Run with::
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import matplotlib
 
@@ -37,6 +37,164 @@ def _fmt(value: object, decimals: int = 1) -> str:
     if value is None:
         return "—"
     return f"{float(value):.{decimals}f}"
+
+
+def _escape_applescript(text: str) -> str:
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _run_osascript(script: str) -> str | None:
+    import subprocess
+
+    completed = subprocess.run(
+        ["osascript", "-e", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return None
+    selected = completed.stdout.strip()
+    return selected or None
+
+
+def _pick_directory_macos(*, title: str) -> str | None:
+    prompt = _escape_applescript(title)
+    return _run_osascript(f'POSIX path of (choose folder with prompt "{prompt}")')
+
+
+def _pick_onnx_file_macos(*, title: str) -> str | None:
+    prompt = _escape_applescript(title)
+    # Do not use `of type {"onnx"}`: macOS often has no UTI for .onnx, so the
+    # dialog filters out valid models. Enforce the extension in Python instead.
+    return _run_osascript(f'POSIX path of (choose file with prompt "{prompt}")')
+
+
+def _pick_path_via_tkinter_subprocess(
+    *,
+    kind: Literal["dir", "file"],
+    title: str,
+    initial: str | None = None,
+) -> str | None:
+    """Run Tk in a subprocess so the dialog owns the process main thread.
+
+    Calling Tk from Streamlit's script thread crashes on macOS
+    (``NSWindow should only be instantiated on the main thread``).
+    """
+    import subprocess
+    import sys
+
+    initial_repr = repr(initial)
+    title_repr = repr(title)
+    if kind == "dir":
+        picker = (
+            "selected = filedialog.askdirectory("
+            f"title={title_repr}, initialdir={initial_repr} or None)"
+        )
+    else:
+        # Keep "*.onnx" preferred; include *.* so macOS/Tk still lists files when
+        # the extension filter is flaky, then validate in Python.
+        picker = (
+            "selected = filedialog.askopenfilename("
+            f"title={title_repr}, initialdir={initial_repr} or None, "
+            'filetypes=[("ONNX model", "*.onnx"), ("All files", "*.*")], '
+            'defaultextension=".onnx")'
+        )
+
+    script = "\n".join(
+        [
+            "import tkinter as tk",
+            "from tkinter import filedialog",
+            "root = tk.Tk()",
+            "root.withdraw()",
+            "try:",
+            '    root.attributes("-topmost", True)',
+            "except tk.TclError:",
+            "    pass",
+            picker,
+            "root.destroy()",
+            "print(selected or '')",
+        ]
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return None
+    selected = completed.stdout.strip()
+    return selected or None
+
+
+def _pick_directory(*, title: str = "Select recording folder") -> str | None:
+    """Open a native folder dialog."""
+    import sys
+
+    if sys.platform == "darwin":
+        return _pick_directory_macos(title=title)
+    initial = st.session_state.get("recording_path") or None
+    return _pick_path_via_tkinter_subprocess(kind="dir", title=title, initial=initial)
+
+
+def _pick_onnx_file(*, title: str = "Select sleep-scoring model") -> str | None:
+    """Open a native file dialog and accept only ``.onnx`` paths."""
+    import sys
+
+    st.session_state.pop("model_path_error", None)
+    if sys.platform == "darwin":
+        selected = _pick_onnx_file_macos(title=title)
+    else:
+        current = st.session_state.get("model_path") or ""
+        initial_dir = str(Path(current).expanduser().parent) if current else None
+        selected = _pick_path_via_tkinter_subprocess(
+            kind="file",
+            title=title,
+            initial=initial_dir,
+        )
+    if selected is None:
+        return None
+    if not selected.lower().endswith(".onnx"):
+        st.session_state["model_path_error"] = "Please select a .onnx model file."
+        return None
+    return selected
+
+
+def _path_input_with_browse(
+    *,
+    label: str,
+    state_key: str,
+    browse_label: str,
+    pick: Callable[[], str | None],
+    help_text: str,
+) -> str:
+    """Text path field with a side Browse button; the input shrinks first."""
+
+    def _on_browse() -> None:
+        # Callback runs before widgets are instantiated on the rerun, so we can
+        # safely assign the widget's session-state key here.
+        selected = pick()
+        if selected:
+            st.session_state[state_key] = selected
+
+    try:
+        cols = st.sidebar.columns([1, 0.42], gap="small", vertical_alignment="bottom")
+    except TypeError:
+        cols = st.sidebar.columns([1, 0.42])
+    with cols[0]:
+        # Marker so CSS can target only these path rows (not other sidebar controls).
+        st.markdown('<div class="nw-path-pair"></div>', unsafe_allow_html=True)
+        value = st.text_input(label, key=state_key)
+    with cols[1]:
+        st.button(
+            browse_label,
+            key=f"browse_{state_key}",
+            help=help_text,
+            on_click=_on_browse,
+            width='stretch',
+        )
+    return value
 
 
 def _build_config(
@@ -96,7 +254,7 @@ def _render_sleep_section(sleep: dict[str, Any]) -> None:
             }
             for stage, minutes in sorted(stage_minutes.items())
         ]
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width='stretch', hide_index=True)
 
 
 def _render_artifacts_section(artifacts: dict[str, Any]) -> None:
@@ -115,14 +273,14 @@ def _render_artifacts_section(artifacts: dict[str, Any]) -> None:
         st.markdown("**Left electrode**")
         st.dataframe(
             [{"Label": label, "Percent": _pct(pct)} for label, pct in sorted(artifacts["left"].items())],
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
     with right_col:
         st.markdown("**Right electrode**")
         st.dataframe(
             [{"Label": label, "Percent": _pct(pct)} for label, pct in sorted(artifacts["right"].items())],
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 
@@ -141,7 +299,7 @@ def _render_edge_table(edge: dict[str, Any], title: str) -> None:
         st.caption("Sequence labels")
         st.dataframe(
             [{"Label": label, "Count": count} for label, count in seq_hist.items()],
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 
@@ -172,7 +330,7 @@ def _render_plots(plots: dict[str, plt.Figure]) -> None:
     for key in plot_display_order(plots):
         fig = plots[key]
         st.markdown(f"**{plot_title(key)}**")
-        st.pyplot(fig, use_container_width=True)
+        st.pyplot(fig, width='stretch')
 
 
 def _run_and_store(config: AnalysisConfig) -> None:
@@ -188,13 +346,88 @@ def _run_and_store(config: AnalysisConfig) -> None:
 
 
 st.set_page_config(page_title="Nightwatch", layout="wide")
+st.markdown(
+    """
+    <style>
+    /* Hide layout markers used to find path+browse rows. */
+    [data-testid="stSidebar"] .nw-path-pair {
+      display: none;
+    }
+
+    /* Path rows only: fixed Browse width; text input absorbs shrink. */
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:has(.nw-path-pair) {
+      display: flex !important;
+      flex-wrap: nowrap !important;
+      gap: 0.4rem !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      overflow: hidden !important;
+      align-items: flex-end !important;
+      box-sizing: border-box !important;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:has(.nw-path-pair)
+      > [data-testid="stColumn"]:first-child,
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:has(.nw-path-pair)
+      > div:first-child {
+      flex: 1 1 0% !important;
+      min-width: 0 !important;
+      width: auto !important;
+      max-width: calc(100% - 5.75rem) !important;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:has(.nw-path-pair)
+      > [data-testid="stColumn"]:last-child,
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:has(.nw-path-pair)
+      > div:last-child {
+      flex: 0 0 5.5rem !important;
+      width: 5.5rem !important;
+      min-width: 5.5rem !important;
+      max-width: 5.5rem !important;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:has(.nw-path-pair)
+      [data-testid="stTextInput"],
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:has(.nw-path-pair)
+      [data-testid="stTextInput"] > div,
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:has(.nw-path-pair)
+      [data-testid="stTextInput"] input {
+      min-width: 0 !important;
+      max-width: 100% !important;
+      width: 100% !important;
+      box-sizing: border-box !important;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:has(.nw-path-pair) button {
+      white-space: nowrap !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.title("Nightwatch")
 st.caption(f"v{__version__} — sleep recording QC powered by somnio")
 
 st.sidebar.header("Settings")
-recording_path = st.sidebar.text_input("Recording path")
+st.session_state.setdefault("recording_path", "")
+st.session_state.setdefault("model_path", "")
+recording_path = _path_input_with_browse(
+    label="Recording path",
+    state_key="recording_path",
+    browse_label="Browse",
+    pick=_pick_directory,
+    help_text="Choose a recording folder",
+)
 format_choice = st.sidebar.selectbox("Format", options=["zmax"])
-model_path = st.sidebar.text_input("Sleep model path (.onnx)")
+model_path = _path_input_with_browse(
+    label="Sleep model path (.onnx)",
+    state_key="model_path",
+    browse_label="Browse",
+    pick=_pick_onnx_file,
+    help_text="Choose an ONNX sleep-scoring model",
+)
+if st.session_state.get("model_path_error"):
+    st.sidebar.error(st.session_state["model_path_error"])
 edge_minutes = st.sidebar.number_input("Edge minutes", min_value=1.0, value=30.0, step=1.0)
 usability_model = st.sidebar.selectbox(
     "Usability model",
