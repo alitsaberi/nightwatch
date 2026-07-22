@@ -1,0 +1,69 @@
+[project]
+name = "nightwatch"
+version = "0.1.0"
+description = "Sleep recording QC and review tool powered by somnio."
+readme = "README.md"
+authors = [
+    { name = "Ali Saberi", email = "ali.saberi96@gmail.com" }
+]
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+keywords = [
+    "sleep",
+    "eeg",
+    "quality-control",
+    "zmax"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "somnio[edf,onnx,schemas,eeg-usability,signal]",
+    "streamlit>=1.28",
+    "typer>=0.21",
+    "matplotlib>=3.8",
+    "jinja2>=3.1",
+    "pydantic>=2.12",
+]
+
+[project.scripts]
+nightwatch = "nightwatch.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.9.13,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    { include-group = "lint" },
+    { include-group = "test" },
+]
+lint = [
+    "ruff>=0.14",
+]
+test = [
+    "pytest>=9.0",
+]
+
+[tool.uv.dependency-groups]
+dev = { requires-python = ">=3.12" }
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint]
+extend-select = ["TD001", "TD007"]
+
+[tool.ruff.format]
+docstring-code-format = true
+docstring-code-line-length = "dynamic"

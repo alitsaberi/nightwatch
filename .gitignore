@@ -1,0 +1,33 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[codz]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.venv
+venv/
+env/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Tools
+.ruff_cache/
+.mypy_cache/
+
+# Environments
+.env
+.envrc
+
+# macOS
+.DS_Store
+
+# Reports
+/report.html
+/out/
