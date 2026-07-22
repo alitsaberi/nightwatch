@@ -18,11 +18,11 @@ import matplotlib.pyplot as plt
 import streamlit as st
 
 from nightwatch import __version__
-from nightwatch.config import AnalysisConfig
+from nightwatch.config import AnalysisConfig, DEFAULT_EYE_MOVEMENT_PATTERN
 from nightwatch.metrics import compute_metrics
 from nightwatch.pipeline import AnalysisResult, run_analysis
 from nightwatch.plots import build_plots
-from nightwatch.report import PLOT_ORDER, PLOT_TITLES, render
+from nightwatch.report import plot_display_order, plot_title, render
 
 UsabilityModel = Literal["default", "lite", "binary", "lite_binary"]
 
@@ -45,6 +45,7 @@ def _build_config(
     model_path: str,
     edge_minutes: float,
     usability_model: UsabilityModel,
+    eye_movement_pattern: str,
 ) -> AnalysisConfig:
     return AnalysisConfig(
         recording_path=Path(recording_path),
@@ -52,6 +53,7 @@ def _build_config(
         model_path=Path(model_path),
         edge_minutes=edge_minutes,
         usability_model=usability_model,
+        eye_movement_pattern=eye_movement_pattern,
     )
 
 
@@ -75,12 +77,13 @@ def _render_recording_section(rec: dict[str, Any]) -> None:
 
 def _render_sleep_section(sleep: dict[str, Any]) -> None:
     st.subheader("Sleep")
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     col1.metric("TRT", f"{_fmt(sleep['trt_minutes'])} min")
     col2.metric("TST", f"{_fmt(sleep['tst_minutes'])} min")
     col3.metric("Sleep efficiency", _pct(sleep["sleep_efficiency_pct"]))
     col4.metric("SOL", f"{_fmt(sleep['sol_minutes'])} min")
     col5.metric("WASO", f"{_fmt(sleep['waso_minutes'])} min")
+    col6.metric("Unusable", f"{_fmt(sleep.get('unusable_minutes', 0.0))} min")
 
     stage_minutes: dict[str, float] = sleep.get("stage_minutes", {})
     if stage_minutes:
@@ -125,45 +128,35 @@ def _render_artifacts_section(artifacts: dict[str, Any]) -> None:
 
 
 def _render_edge_table(edge: dict[str, Any], title: str) -> None:
+    if not edge.get("has_matches"):
+        return
+
     st.markdown(f"**{title}**")
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     col1.metric("Window duration", edge["duration_hms"])
     col2.metric(
-        "Sequences",
+        "Matched sequences",
         str(edge["sequence_count"]),
         delta=f"{_fmt(edge['sequence_rate_per_minute'], 2)} / min",
     )
-    col3.metric(
-        "Primitives",
-        str(edge["primitive_count"]),
-        delta=f"{_fmt(edge['primitive_rate_per_minute'], 2)} / min",
-    )
 
     seq_hist: dict[str, int] = edge.get("sequence_label_histogram", {})
-    prim_hist: dict[str, int] = edge.get("primitive_label_histogram", {})
-    if seq_hist or prim_hist:
-        hist_col1, hist_col2 = st.columns(2)
-        with hist_col1:
-            if seq_hist:
-                st.caption("Sequence labels")
-                st.dataframe(
-                    [{"Label": label, "Count": count} for label, count in seq_hist.items()],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-        with hist_col2:
-            if prim_hist:
-                st.caption("Primitive labels")
-                st.dataframe(
-                    [{"Label": label, "Count": count} for label, count in prim_hist.items()],
-                    use_container_width=True,
-                    hide_index=True,
-                )
+    if seq_hist:
+        st.caption("Sequence labels")
+        st.dataframe(
+            [{"Label": label, "Count": count} for label, count in seq_hist.items()],
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 def _render_eye_movement_section(em: dict[str, Any]) -> None:
     st.subheader("Eye movements (edge windows)")
     st.caption(f"Edge window length: {_fmt(em['edge_minutes'])} min (start and end)")
+    st.caption(f"Sequence pattern: `{em['pattern']}`")
+    if not em.get("has_matches"):
+        st.info("No matching eye-movement sequences in either edge window.")
+        return
     _render_edge_table(em["start"], "First edge window")
     _render_edge_table(em["end"], "Last edge window")
 
@@ -180,11 +173,9 @@ def _render_metrics(metrics: dict[str, Any]) -> None:
 
 def _render_plots(plots: dict[str, plt.Figure]) -> None:
     st.subheader("Plots")
-    for key in PLOT_ORDER:
-        fig = plots.get(key)
-        if fig is None:
-            continue
-        st.markdown(f"**{PLOT_TITLES.get(key, key.replace('_', ' ').title())}**")
+    for key in plot_display_order(plots):
+        fig = plots[key]
+        st.markdown(f"**{plot_title(key)}**")
         st.pyplot(fig, use_container_width=True)
 
 
@@ -213,6 +204,10 @@ usability_model = st.sidebar.selectbox(
     "Usability model",
     options=["default", "lite", "binary", "lite_binary"],
 )
+eye_movement_pattern = st.sidebar.text_input(
+    "Eye-movement sequence pattern",
+    value=DEFAULT_EYE_MOVEMENT_PATTERN,
+)
 
 run_clicked = st.sidebar.button("Run analysis", type="primary")
 
@@ -221,6 +216,8 @@ if run_clicked:
         st.error("Enter a recording path.")
     elif not model_path.strip():
         st.error("Enter a sleep-scoring model path.")
+    elif not eye_movement_pattern.strip():
+        st.error("Enter an eye-movement sequence pattern.")
     else:
         config = _build_config(
             recording_path.strip(),
@@ -228,6 +225,7 @@ if run_clicked:
             model_path.strip(),
             float(edge_minutes),
             usability_model,  # type: ignore[arg-type]
+            eye_movement_pattern.strip(),
         )
         validation_error = _validate_config(config)
         if validation_error:

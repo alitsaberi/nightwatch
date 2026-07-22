@@ -46,13 +46,8 @@ def _make_result() -> AnalysisResult:
     edge_window = recording[:256]
     edge = EdgeEyeMovementResult(
         window=edge_window,
-        sequences=[
-            Event(onset=int(edge_window.timestamps[50]), duration=500_000_000, type="eye_movement", label="LR"),
-            Event(onset=int(edge_window.timestamps[150]), duration=500_000_000, type="eye_movement", label="RL"),
-        ],
-        primitives=[
-            Event(onset=int(edge_window.timestamps[50]), duration=200_000_000, type="eye_movement", label="L"),
-        ],
+        sequences=[],
+        primitives=[],
     )
     config = AnalysisConfig(
         recording_path="/tmp/recording",
@@ -69,6 +64,7 @@ def _make_result() -> AnalysisResult:
         config=config,
         recording=recording,
         raw_channel_names=("EEG_L", "EEG_R"),
+        eeg_channels=("EEG_L", "EEG_R"),
         hypnodensity=hypnodensity,
         hypnogram=hypnogram,
         usability_scores=usability,
@@ -116,14 +112,36 @@ def test_compute_metrics_eye_movement_counts() -> None:
     metrics = compute_metrics(_make_result())["eye_movement"]
 
     assert metrics["edge_minutes"] == 30.0
-    assert metrics["start"]["sequence_count"] == 2
-    assert metrics["start"]["primitive_count"] == 1
-    assert metrics["start"]["sequence_label_histogram"] == {"LR": 1, "RL": 1}
-    assert metrics["start"]["sequence_rate_per_minute"] > 0
-    assert metrics["end"]["sequence_count"] == 2
-    assert metrics["end"]["primitive_rate_per_minute"] == pytest.approx(
-        metrics["end"]["primitive_count"] / (metrics["end"]["duration_seconds"] / 60.0)
+    assert metrics["has_matches"] is False
+    assert metrics["start"]["has_matches"] is False
+    assert metrics["end"]["has_matches"] is False
+    assert metrics["pattern"]
+
+
+def test_compute_metrics_eye_movement_reports_matching_sequences() -> None:
+    result = _make_result()
+    edge_window = result.recording[:256]
+    matched = EdgeEyeMovementResult(
+        window=edge_window,
+        sequences=[
+            Event(
+                onset=int(edge_window.timestamps[50]),
+                duration=500_000_000,
+                type="eye_movement",
+                label="LRL",
+            ),
+        ],
+        primitives=[],
     )
+    result.edge_start = matched
+    result.edge_end = EdgeEyeMovementResult(window=edge_window, sequences=[], primitives=[])
+
+    metrics = compute_metrics(result)["eye_movement"]
+    assert metrics["has_matches"] is True
+    assert metrics["start"]["has_matches"] is True
+    assert metrics["start"]["sequence_count"] == 1
+    assert metrics["start"]["sequence_label_histogram"] == {"LRL": 1}
+    assert metrics["end"]["has_matches"] is False
 
 
 def test_compute_metrics_waso_after_sleep_onset() -> None:
@@ -138,6 +156,21 @@ def test_compute_metrics_waso_after_sleep_onset() -> None:
     assert sleep["sol_minutes"] == pytest.approx(0.5)
     assert sleep["waso_minutes"] == pytest.approx(0.5)
     assert sleep["tst_minutes"] == pytest.approx(1.5)
+
+
+def test_compute_metrics_excludes_unusable_from_tst() -> None:
+    result = _make_result()
+    result.hypnogram = Epochs(
+        labels=np.array(["W", "N2", "Unusable", "N3", "R"], dtype=object),
+        period_length=30_000_000_000,
+        onset=int(result.recording.timestamps[0]),
+    )
+    sleep = compute_metrics(result)["sleep"]
+
+    assert sleep["unusable_minutes"] == pytest.approx(0.5)
+    assert sleep["tst_minutes"] == pytest.approx(1.5)
+    assert sleep["wake_epoch_count"] == 1
+    assert sleep["sleep_epoch_count"] == 3
 
 
 def test_compute_metrics_binary_usability_labels() -> None:
@@ -172,8 +205,6 @@ def test_compute_metrics_empty_edge_events() -> None:
     edge = compute_metrics(result)["eye_movement"]["start"]
 
     assert edge["sequence_count"] == 0
-    assert edge["primitive_count"] == 0
+    assert edge["has_matches"] is False
     assert edge["sequence_rate_per_minute"] == 0.0
-    assert edge["primitive_rate_per_minute"] == 0.0
     assert edge["sequence_label_histogram"] == {}
-    assert edge["primitive_label_histogram"] == {}

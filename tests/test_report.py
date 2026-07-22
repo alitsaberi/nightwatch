@@ -55,9 +55,7 @@ def _make_result() -> AnalysisResult:
     edge_window = recording[:256]
     edge = EdgeEyeMovementResult(
         window=edge_window,
-        sequences=[
-            Event(onset=int(edge_window.timestamps[50]), duration=500_000_000, type="eye_movement", label="LR"),
-        ],
+        sequences=[],
         primitives=[],
     )
     config = AnalysisConfig(
@@ -68,6 +66,7 @@ def _make_result() -> AnalysisResult:
         config=config,
         recording=recording,
         raw_channel_names=("EEG_L", "EEG_R"),
+        eeg_channels=("EEG_L", "EEG_R"),
         hypnodensity=hypnodensity,
         hypnogram=hypnogram,
         usability_scores=usability,
@@ -89,8 +88,11 @@ def test_render_produces_self_contained_html() -> None:
     assert "/tmp/recording" in html
     assert "Total sleep time (TST)" in html
     assert "data:image/png;base64," in html
-    assert "Hypnodensity" in html
-    assert "Eye Movements (First Edge Window)" in html
+    assert "Sleep scoring" in html
+    assert "EEG Left" in html
+    assert "EEG Right" in html
+    assert "Eye movements" in html
+    assert "No matching eye-movement sequences" in html
 
 
 def test_render_accepts_empty_plots() -> None:

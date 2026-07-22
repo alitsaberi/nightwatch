@@ -24,6 +24,7 @@ USABILITY_LABELS_BINARY: dict[int, str] = {
 }
 
 WAKE_STAGE_LABELS = frozenset({"W", "Wake", "wake", "0"})
+UNUSABLE_STAGE_LABELS = frozenset({"Unusable", "unusable", "UNUSABLE"})
 
 
 def _ns_to_datetime(ns: int) -> datetime:
@@ -47,13 +48,19 @@ def _normalize_stage_label(label: object) -> str:
     return str(label)
 
 
+def _is_unusable_label(label: object) -> bool:
+    return _normalize_stage_label(label) in UNUSABLE_STAGE_LABELS
+
+
 def _is_wake_label(label: object) -> bool:
+    if _is_unusable_label(label):
+        return False
     normalized = _normalize_stage_label(label)
     return normalized in WAKE_STAGE_LABELS or normalized.upper() == "W"
 
 
 def _is_sleep_label(label: object) -> bool:
-    return not _is_wake_label(label)
+    return not _is_wake_label(label) and not _is_unusable_label(label)
 
 
 def _usability_label_map(model_key: str) -> dict[int, str]:
@@ -91,7 +98,8 @@ def _compute_sleep_metrics(hypnogram: Any) -> dict[str, Any]:
     }
 
     sleep_epoch_count = sum(1 for label in labels if _is_sleep_label(label))
-    wake_epoch_count = n_epochs - sleep_epoch_count
+    wake_epoch_count = sum(1 for label in labels if _is_wake_label(label))
+    unusable_epoch_count = sum(1 for label in labels if _is_unusable_label(label))
     tst_seconds = sleep_epoch_count * epoch_s
 
     first_sleep_idx = next(
@@ -116,6 +124,8 @@ def _compute_sleep_metrics(hypnogram: Any) -> dict[str, Any]:
         "waso_minutes": waso_seconds / 60.0,
         "wake_epoch_count": wake_epoch_count,
         "sleep_epoch_count": sleep_epoch_count,
+        "unusable_epoch_count": unusable_epoch_count,
+        "unusable_minutes": unusable_epoch_count * epoch_s / 60.0,
         "epoch_length_seconds": epoch_s,
         "stage_pct": stage_pct,
         "stage_minutes": stage_minutes,
@@ -159,7 +169,6 @@ def _compute_edge_eye_movement_metrics(edge: EdgeEyeMovementResult) -> dict[str,
     duration_seconds = edge.window.duration.total_seconds()
     duration_minutes = duration_seconds / 60.0 if duration_seconds else 0.0
     sequence_count = len(edge.sequences)
-    primitive_count = len(edge.primitives)
 
     def rate_per_minute(count: int) -> float:
         if duration_minutes <= 0:
@@ -169,12 +178,10 @@ def _compute_edge_eye_movement_metrics(edge: EdgeEyeMovementResult) -> dict[str,
     return {
         "duration_seconds": duration_seconds,
         "duration_hms": _format_duration_hms(duration_seconds),
+        "has_matches": sequence_count > 0,
         "sequence_count": sequence_count,
-        "primitive_count": primitive_count,
         "sequence_rate_per_minute": rate_per_minute(sequence_count),
-        "primitive_rate_per_minute": rate_per_minute(primitive_count),
         "sequence_label_histogram": _event_label_histogram(edge.sequences),
-        "primitive_label_histogram": _event_label_histogram(edge.primitives),
     }
 
 
@@ -191,6 +198,8 @@ def compute_metrics(result: AnalysisResult) -> dict[str, Any]:
     start_ns = int(recording.timestamps[0]) if recording.n_samples else 0
     end_ns = int(recording.timestamps[-1]) if recording.n_samples else start_ns
     duration_seconds = recording.duration.total_seconds()
+    edge_start = _compute_edge_eye_movement_metrics(result.edge_start)
+    edge_end = _compute_edge_eye_movement_metrics(result.edge_end)
 
     return {
         "recording": {
@@ -207,7 +216,9 @@ def compute_metrics(result: AnalysisResult) -> dict[str, Any]:
         "sleep": _compute_sleep_metrics(result.hypnogram),
         "eye_movement": {
             "edge_minutes": result.config.edge_minutes,
-            "start": _compute_edge_eye_movement_metrics(result.edge_start),
-            "end": _compute_edge_eye_movement_metrics(result.edge_end),
+            "pattern": result.config.eye_movement_pattern,
+            "has_matches": edge_start["has_matches"] or edge_end["has_matches"],
+            "start": edge_start,
+            "end": edge_end,
         },
     }

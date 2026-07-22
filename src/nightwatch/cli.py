@@ -50,6 +50,10 @@ def run(
         "default",
         help="EEG usability model variant.",
     ),
+    eye_movement_pattern: str = typer.Option(
+        r"^(?!.*([LR])\1)[LR]{3,}$",
+        help="Regex that eye-movement sequence labels must fully match.",
+    ),
     output: Path = typer.Option(Path("report.html"), help="Output HTML report path."),
 ) -> None:
     """Analyze a recording and write an HTML report."""
@@ -74,6 +78,7 @@ def run(
         model_path=model,
         edge_minutes=edge_minutes,
         usability_model=usability_model,
+        eye_movement_pattern=eye_movement_pattern,
         output_path=output,
     )
 

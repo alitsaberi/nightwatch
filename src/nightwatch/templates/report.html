@@ -50,6 +50,7 @@
         <tr><th>Sleep efficiency</th><td>{{ sleep.sleep_efficiency_pct | pct }}</td></tr>
         <tr><th>Sleep onset latency (SOL)</th><td>{{ sleep.sol_minutes | fmt(1) }} min</td></tr>
         <tr><th>Wake after sleep onset (WASO)</th><td>{{ sleep.waso_minutes | fmt(1) }} min</td></tr>
+        <tr><th>Unusable epochs</th><td>{{ sleep.unusable_minutes | fmt(1) }} min</td></tr>
         <tr><th>Epoch length</th><td>{{ sleep.epoch_length_seconds | fmt(1) }} s</td></tr>
       </tbody>
     </table>
@@ -108,15 +109,19 @@
   <section class="section">
     <h2>Eye movements (edge windows)</h2>
     <p>Edge window length: {{ em.edge_minutes | fmt(1) }} min (start and end)</p>
+    <p>Sequence pattern: <code>{{ em.pattern }}</code></p>
 
+    {% if not em.has_matches %}
+    <p>No matching eye-movement sequences in either edge window.</p>
+    {% else %}
     {% for edge_name, edge_label in [("start", "First edge window"), ("end", "Last edge window")] %}
     {% set edge = em[edge_name] %}
+    {% if edge.has_matches %}
     <h3>{{ edge_label }}</h3>
     <table>
       <tbody>
         <tr><th>Window duration</th><td>{{ edge.duration_hms }}</td></tr>
-        <tr><th>Sequences</th><td>{{ edge.sequence_count }} ({{ edge.sequence_rate_per_minute | fmt(2) }} / min)</td></tr>
-        <tr><th>Primitives</th><td>{{ edge.primitive_count }} ({{ edge.primitive_rate_per_minute | fmt(2) }} / min)</td></tr>
+        <tr><th>Matched sequences</th><td>{{ edge.sequence_count }} ({{ edge.sequence_rate_per_minute | fmt(2) }} / min)</td></tr>
       </tbody>
     </table>
 
@@ -131,19 +136,9 @@
       </tbody>
     </table>
     {% endif %}
-
-    {% if edge.primitive_label_histogram %}
-    <h4>Primitive labels</h4>
-    <table>
-      <thead><tr><th>Label</th><th>Count</th></tr></thead>
-      <tbody>
-        {% for label, count in edge.primitive_label_histogram.items() %}
-        <tr><td>{{ label }}</td><td>{{ count }}</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
     {% endif %}
     {% endfor %}
+    {% endif %}
   </section>
 
   <section class="section">

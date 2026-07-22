@@ -12,22 +12,41 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from matplotlib.figure import Figure
 
 PLOT_TITLES: dict[str, str] = {
-    "hypnodensity": "Hypnodensity",
-    "hypnogram": "Hypnogram",
-    "spectrogram": "Spectrogram",
-    "usability": "EEG Usability",
-    "eye_movement_start": "Eye Movements (First Edge Window)",
-    "eye_movement_end": "Eye Movements (Last Edge Window)",
+    "sleep_scoring": "Sleep scoring",
+    "eye_movements": "Eye movements",
 }
 
 PLOT_ORDER: tuple[str, ...] = (
-    "hypnodensity",
-    "hypnogram",
-    "spectrogram",
-    "usability",
-    "eye_movement_start",
-    "eye_movement_end",
+    "sleep_scoring",
+    "eye_movements",
 )
+
+CHANNEL_TITLE_BY_SUFFIX: dict[str, str] = {
+    "EEG_L": "EEG Left",
+    "EEG_R": "EEG Right",
+}
+
+
+def plot_display_order(plots: dict[str, Figure]) -> list[str]:
+    """Return plot keys: EEG Left/Right blocks first, then sleep scoring and edges."""
+    preferred_channels = ("channel_EEG_L", "channel_EEG_R")
+    channel_keys = [key for key in preferred_channels if key in plots]
+    channel_keys.extend(
+        sorted(key for key in plots if key.startswith("channel_") and key not in channel_keys)
+    )
+    ordered = [key for key in PLOT_ORDER if key in plots]
+    extras = [key for key in plots if key not in channel_keys and key not in ordered]
+    return channel_keys + ordered + extras
+
+
+def plot_title(key: str) -> str:
+    """Human-readable title for a plot key."""
+    if key in PLOT_TITLES:
+        return PLOT_TITLES[key]
+    if key.startswith("channel_"):
+        suffix = key.removeprefix("channel_")
+        return CHANNEL_TITLE_BY_SUFFIX.get(suffix, suffix.replace("_", " "))
+    return key.replace("_", " ").title()
 
 
 def _default_template_dir() -> Path:
@@ -59,24 +78,12 @@ def _format_pct(value: object, decimals: int = 1) -> str:
 
 def _encode_plots(plots: dict[str, Figure]) -> list[dict[str, str]]:
     encoded: list[dict[str, str]] = []
-    for key in PLOT_ORDER:
-        fig = plots.get(key)
-        if fig is None:
-            continue
+    for key in plot_display_order(plots):
+        fig = plots[key]
         encoded.append(
             {
                 "key": key,
-                "title": PLOT_TITLES.get(key, key.replace("_", " ").title()),
-                "png_base64": _figure_to_png_base64(fig),
-            }
-        )
-    for key, fig in plots.items():
-        if key in PLOT_ORDER:
-            continue
-        encoded.append(
-            {
-                "key": key,
-                "title": PLOT_TITLES.get(key, key.replace("_", " ").title()),
+                "title": plot_title(key),
                 "png_base64": _figure_to_png_base64(fig),
             }
         )

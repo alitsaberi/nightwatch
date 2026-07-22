@@ -9,13 +9,14 @@ import matplotlib
 matplotlib.use("Agg")
 
 import numpy as np
+import pytest
 from matplotlib.figure import Figure
 
 from somnio.data import Epochs, Event, TimeSeries
 
 from nightwatch.config import AnalysisConfig
 from nightwatch.pipeline import AnalysisResult, EdgeEyeMovementResult
-from nightwatch.plots import build_plots, plot_hypnodensity, plot_hypnogram, plot_spectrogram
+from nightwatch.plots import build_plots, plot_channel_overview, plot_hypnodensity, plot_hypnogram
 
 
 def _make_result() -> AnalysisResult:
@@ -64,6 +65,7 @@ def _make_result() -> AnalysisResult:
         config=config,
         recording=recording,
         raw_channel_names=("EEG_L", "EEG_R"),
+        eeg_channels=("EEG_L", "EEG_R"),
         hypnodensity=hypnodensity,
         hypnogram=hypnogram,
         usability_scores=usability,
@@ -76,7 +78,7 @@ def _make_result() -> AnalysisResult:
 
 def test_plot_hypnodensity_returns_figure() -> None:
     result = _make_result()
-    fig = plot_hypnodensity(result.hypnodensity)
+    fig = plot_hypnodensity(result.hypnodensity, usability_scores=result.usability_scores)
     assert isinstance(fig, Figure)
     assert fig.axes
     plt_close(fig)
@@ -90,26 +92,52 @@ def test_plot_hypnogram_returns_figure() -> None:
     plt_close(fig)
 
 
-def test_plot_spectrogram_returns_figure() -> None:
+def test_plot_channel_overview_returns_figure() -> None:
     result = _make_result()
-    fig = plot_spectrogram(result.recording, "EEG_L")
+    fig = plot_channel_overview(
+        result.recording,
+        "EEG_L",
+        result.usability_scores,
+        0,
+        "default",
+    )
     assert isinstance(fig, Figure)
-    assert "Spectrogram" in fig.axes[0].get_title()
+    assert len(fig.axes) == 3
     plt_close(fig)
 
 
 def test_build_plots_returns_named_figures() -> None:
     plots = build_plots(_make_result())
     assert set(plots) == {
-        "hypnodensity",
-        "hypnogram",
-        "spectrogram",
-        "usability",
-        "eye_movement_start",
-        "eye_movement_end",
+        "channel_EEG_L",
+        "channel_EEG_R",
+        "sleep_scoring",
+        "eye_movements",
     }
+    assert len(plots["eye_movements"].axes) == 2
     for fig in plots.values():
         assert isinstance(fig, Figure)
+        assert fig._suptitle is None
+        plt_close(fig)
+
+
+def test_full_recording_plots_share_time_axis() -> None:
+    result = _make_result()
+    duration_h = result.recording.n_samples / float(result.recording.sample_rate) / 3600.0
+    plots = build_plots(result)
+
+    full_recording_keys = ("channel_EEG_L", "channel_EEG_R", "sleep_scoring")
+    for key in full_recording_keys:
+        for ax in plots[key].axes:
+            xlim = ax.get_xlim()
+            assert xlim[0] == 0.0
+            assert xlim[1] == pytest.approx(duration_h)
+
+    sleep_fig = plots["sleep_scoring"]
+    assert len(sleep_fig.axes) == 2
+    assert sleep_fig.axes[0].get_xlim() == sleep_fig.axes[1].get_xlim()
+
+    for fig in plots.values():
         plt_close(fig)
 
 
