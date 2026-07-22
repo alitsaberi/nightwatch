@@ -21,7 +21,7 @@ nightwatch run /path/to/recording \
   --format zmax \
   --model /path/to/model.onnx \
   --edge-minutes 30 \
-  --usability-model default \
+  --usability-model lite \
   --output ./report.html
 ```
 

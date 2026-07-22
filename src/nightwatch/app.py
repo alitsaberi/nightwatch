@@ -198,7 +198,7 @@ model_path = st.sidebar.text_input("Sleep model path (.onnx)")
 edge_minutes = st.sidebar.number_input("Edge minutes", min_value=1.0, value=30.0, step=1.0)
 usability_model = st.sidebar.selectbox(
     "Usability model",
-    options=["default", "lite", "binary", "lite_binary"],
+    options=["lite", "default", "binary", "lite_binary"],
 )
 eye_movement_pattern = st.sidebar.text_input(
     "Eye-movement sequence pattern",

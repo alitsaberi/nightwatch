@@ -335,7 +335,7 @@ def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
     load_mock.assert_called_once_with(config)
     sleep_load_mock.assert_called_once_with(model_path)
     assert score_mock.call_count == 2
-    usability_load_mock.assert_called_once_with("default")
+    usability_load_mock.assert_called_once_with("lite")
     usability_mock.assert_called_once()
     assert edge_mock.call_count == 2
 

@@ -47,7 +47,7 @@ def run(
     model: Path = typer.Option(..., help="Path to sleep-scoring ONNX model."),
     edge_minutes: float = typer.Option(30.0, help="Minutes at start/end for eye-movement detection."),
     usability_model: Literal["default", "lite", "binary", "lite_binary"] = typer.Option(
-        "default",
+        "lite",
         help="EEG usability model variant.",
     ),
     eye_movement_pattern: str = typer.Option(
