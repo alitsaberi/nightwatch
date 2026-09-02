@@ -28,7 +28,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "somnio[edf,eeg-usability,onnx,schemas,signal]>=0.2.0b2",
+    "somnio[edf,eeg-usability,onnx,schemas,signal]>=0.2.0b3",
     "streamlit>=1.28",
     "typer>=0.21",
     "matplotlib>=3.8",

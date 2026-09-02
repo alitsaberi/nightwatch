@@ -944,7 +944,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1" },
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "pydantic", specifier = ">=2.12" },
-    { name = "somnio", extras = ["edf", "eeg-usability", "onnx", "schemas", "signal"], specifier = ">=0.2.0b2" },
+    { name = "somnio", extras = ["edf", "eeg-usability", "onnx", "schemas", "signal"], specifier = ">=0.2.0b3" },
     { name = "streamlit", specifier = ">=1.28" },
     { name = "typer", specifier = ">=0.21" },
 ]
@@ -2093,16 +2093,16 @@ wheels = [
 
 [[package]]
 name = "somnio"
-version = "0.2.0b2"
+version = "0.2.0b3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5f/30/496ca7571104048868ad1d79077d6797904ece0882d7ffbbafe1a6a13224/somnio-0.2.0b2.tar.gz", hash = "sha256:38183aae13dc8215a4f6ae02d18c5af21fd9b6c5af8785b8aa5c676a8f2fb34b", size = 55872, upload-time = "2026-07-22T12:48:41.615Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ad/28/ca625ecf3a60a1dffa18e32634dda08479790571be8211f5cead4a1fb0a9/somnio-0.2.0b3.tar.gz", hash = "sha256:32a7a9f156fe64b3221d3cc1c215baa0dafecf5e0f883b9bd9b691d0c9e87620", size = 58266, upload-time = "2026-08-10T15:56:19.81Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e6/89/15622eedabc7246d1bcf3dcbd77252d84b65abcfd97e15e6b9d365e2e8c1/somnio-0.2.0b2-py3-none-any.whl", hash = "sha256:b4e6be40ca0381141d1c9f7b584d00f65966aef7b5fe1bf5500a3242998725c3", size = 80579, upload-time = "2026-07-22T12:48:40.545Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/09/f7831d49d417dab9f7ae111af0ba4b4095b8f87c2acfd751955b90c2fd4f/somnio-0.2.0b3-py3-none-any.whl", hash = "sha256:ab71f7d576de70522737e6a36851c261b1c28a1249afe8e516d1f8e885adbfb3", size = 82879, upload-time = "2026-08-10T15:56:18.764Z" },
 ]
 
 [package.optional-dependencies]
