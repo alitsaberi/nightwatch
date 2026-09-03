@@ -11,7 +11,6 @@ import pytest
 
 from somnio.data.timeseries import TimeSeries
 from somnio.data.units import UV, V
-from somnio.tasks.eeg_usability.defaults import SAMPLE_RATE_HZ
 
 from nightwatch.config import AnalysisConfig
 from nightwatch.load import (
@@ -122,7 +121,7 @@ def test_load_zmax_recording_converts_eeg_to_microvolts(tmp_path: Path) -> None:
         timestamps=np.array([0], dtype=np.int64),
         channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z"),
         units=(V, V, "m/s^2", "m/s^2", "m/s^2"),
-        sample_rate=SAMPLE_RATE_HZ,
+        sample_rate=256.0,
     )
 
     with patch("nightwatch.load.read_zmax_multi", return_value=base_ts):
@@ -134,7 +133,7 @@ def test_load_zmax_recording_converts_eeg_to_microvolts(tmp_path: Path) -> None:
     np.testing.assert_allclose(out.timeseries.values[0, 1], 0.0)
 
 
-def test_load_zmax_recording_derives_movement_and_resamples(tmp_path: Path) -> None:
+def test_load_zmax_recording_derives_movement_without_resampling(tmp_path: Path) -> None:
     base_ts = _make_ts(
         n=128,
         sample_rate=128.0,
@@ -148,40 +147,8 @@ def test_load_zmax_recording_derives_movement_and_resamples(tmp_path: Path) -> N
     read_mock.assert_called_once()
     assert "MOVEMENT" in out.timeseries.channel_names
     assert out.raw_channel_names == base_ts.channel_names
-    assert out.timeseries.sample_rate == SAMPLE_RATE_HZ
-    assert out.timeseries.n_samples > base_ts.n_samples
-
-
-def test_load_zmax_recording_keeps_256_hz_without_resampling(tmp_path: Path) -> None:
-    base_ts = _make_ts(
-        channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z"),
-        values=np.random.default_rng(1).random((256, 5)),
-    )
-
-    with patch("nightwatch.load.read_zmax_multi", return_value=base_ts):
-        out = load_zmax_recording(tmp_path)
-
-    assert out.timeseries.sample_rate == SAMPLE_RATE_HZ
+    assert out.timeseries.sample_rate == 128.0
     assert out.timeseries.n_samples == base_ts.n_samples
-
-
-def test_load_recording_dispatches_zmax(tmp_path: Path) -> None:
-    recording = tmp_path / "recording"
-    recording.mkdir()
-    config = AnalysisConfig(
-        recording_path=recording,
-        model_path=tmp_path / "model.onnx",
-    )
-    expected = LoadedRecording(
-        timeseries=_make_ts(channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z", "MOVEMENT")),
-        raw_channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z"),
-    )
-
-    with patch("nightwatch.load.load_zmax_recording", return_value=expected) as load_mock:
-        out = load_recording(config)
-
-    load_mock.assert_called_once_with(recording, movement="MOVEMENT")
-    assert out is expected
 
 
 def test_load_edf_recording_converts_to_microvolts(tmp_path: Path) -> None:
@@ -210,14 +177,29 @@ def test_load_edf_recording_rejects_directory(tmp_path: Path) -> None:
         load_edf_recording(tmp_path)
 
 
+def test_load_recording_dispatches_zmax(tmp_path: Path) -> None:
+    recording = tmp_path / "recording"
+    recording.mkdir()
+    config = AnalysisConfig(
+        recording_path=recording,
+        model_path=tmp_path / "model.onnx",
+    )
+    expected = LoadedRecording(
+        timeseries=_make_ts(channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z", "MOVEMENT")),
+        raw_channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z"),
+    )
+
+    with patch("nightwatch.load.load_zmax_recording", return_value=expected) as load_mock:
+        out = load_recording(config)
+
+    load_mock.assert_called_once_with(recording, movement="MOVEMENT")
+    assert out is expected
+
+
 def test_load_recording_dispatches_edf(tmp_path: Path) -> None:
     edf_path = tmp_path / "rec.edf"
     edf_path.write_bytes(b"edf")
-    config = AnalysisConfig(
-        recording_path=edf_path,
-        format="edf",
-        model_path=tmp_path / "model.onnx",
-    )
+    config = AnalysisConfig(recording_path=edf_path, format="edf")
     expected = LoadedRecording(
         timeseries=_make_ts(channel_names=("C3", "C4")),
         raw_channel_names=("C3", "C4"),

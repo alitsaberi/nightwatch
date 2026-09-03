@@ -132,27 +132,31 @@ def _compute_sleep_metrics(hypnogram: Any) -> dict[str, Any]:
     }
 
 
-def _compute_artifact_metrics(result: AnalysisResult) -> dict[str, Any]:
-    label_map = _usability_label_map(result.config.usability_model)
-    left = result.usability_scores.values[:, 0].astype(int)
-    right = result.usability_scores.values[:, 1].astype(int)
+def _compute_artifact_metrics(result: AnalysisResult) -> dict[str, Any] | None:
+    if result.usability_scores is None:
+        return None
 
-    usable_left_pct = 100.0 * np.mean(left == 0) if left.size else 0.0
-    usable_right_pct = 100.0 * np.mean(right == 0) if right.size else 0.0
+    label_map = _usability_label_map(result.config.usability_model)
+    scores = result.usability_scores
+    channels: dict[str, Any] = {}
+    usable_pct: dict[str, float] = {}
+
+    for index, name in enumerate(scores.channel_names):
+        column = scores.values[:, index].astype(int)
+        channels[str(name)] = _label_percentages(column, label_map)
+        usable_pct[str(name)] = 100.0 * np.mean(column == 0) if column.size else 0.0
+
     samples_total = result.recording.n_samples
-    samples_to_keep = result.usability_samples_to_keep
+    samples_to_keep = result.usability_samples_to_keep or 0
+    epoch_length = result.usability_epoch_length or 0
 
     return {
-        "left": _label_percentages(left, label_map),
-        "right": _label_percentages(right, label_map),
-        "usable_epoch_pct_left": usable_left_pct,
-        "usable_epoch_pct_right": usable_right_pct,
+        "channels": channels,
+        "usable_epoch_pct": usable_pct,
         "samples_to_keep": samples_to_keep,
         "samples_total": samples_total,
         "samples_to_keep_pct": (100.0 * samples_to_keep / samples_total if samples_total else 0.0),
-        "epoch_length_seconds": result.usability_epoch_length / (
-            result.recording.sample_rate or 1.0
-        ),
+        "epoch_length_seconds": epoch_length / (result.recording.sample_rate or 1.0),
     }
 
 
@@ -185,16 +189,15 @@ def compute_metrics(result: AnalysisResult) -> dict[str, Any]:
         result: Completed pipeline output.
 
     Returns:
-        Nested dict with recording, artifact, sleep, and eye-movement summaries.
+        Nested dict with recording summary and optional sleep / artifact /
+        eye-movement sections (omitted when that view was skipped).
     """
     recording = result.recording
     start_ns = int(recording.timestamps[0]) if recording.n_samples else 0
     end_ns = int(recording.timestamps[-1]) if recording.n_samples else start_ns
     duration_seconds = recording.duration.total_seconds()
-    edge_start = _compute_edge_eye_movement_metrics(result.edge_start)
-    edge_end = _compute_edge_eye_movement_metrics(result.edge_end)
 
-    return {
+    metrics: dict[str, Any] = {
         "recording": {
             "path": str(result.config.recording_path),
             "format": result.config.format,
@@ -205,13 +208,26 @@ def compute_metrics(result: AnalysisResult) -> dict[str, Any]:
             "end": _ns_to_datetime(end_ns).isoformat(),
             "channels": list(result.raw_channel_names),
         },
-        "artifacts": _compute_artifact_metrics(result),
-        "sleep": _compute_sleep_metrics(result.hypnogram),
-        "eye_movement": {
+    }
+
+    if result.hypnogram is not None:
+        metrics["sleep"] = _compute_sleep_metrics(result.hypnogram)
+
+    artifacts = _compute_artifact_metrics(result)
+    if artifacts is not None:
+        metrics["artifacts"] = artifacts
+
+    if result.edge_start is not None and result.edge_end is not None:
+        edge_start = _compute_edge_eye_movement_metrics(result.edge_start)
+        edge_end = _compute_edge_eye_movement_metrics(result.edge_end)
+        metrics["eye_movement"] = {
             "edge_minutes": result.config.edge_minutes,
             "pattern": result.config.eye_movement_pattern,
+            "left": result.config.eye_left,
+            "right": result.config.eye_right,
             "has_matches": edge_start["has_matches"] or edge_end["has_matches"],
             "start": edge_start,
             "end": edge_end,
-        },
-    }
+        }
+
+    return metrics

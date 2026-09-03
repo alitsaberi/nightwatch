@@ -10,7 +10,7 @@ from matplotlib.figure import Figure
 from scipy.signal import spectrogram
 
 from nightwatch.metrics import USABILITY_LABELS_BINARY, USABILITY_LABELS_MULTICLASS
-from nightwatch.pipeline import USABILITY_EPOCH_NS, available_eeg_channels
+from nightwatch.pipeline import USABILITY_EPOCH_NS
 
 if TYPE_CHECKING:
     from somnio.data.annotations import Event
@@ -77,18 +77,6 @@ def _usability_label_map(model_key: str) -> dict[int, str]:
     if model_key == "lite_binary":
         return USABILITY_LABELS_BINARY
     return USABILITY_LABELS_MULTICLASS
-
-
-def _usability_channel_index(usability_scores: object, eeg_channel: str, config: object) -> int:
-    if eeg_channel == getattr(config, "eeg_left", None):
-        return 0
-    if eeg_channel == getattr(config, "eeg_right", None):
-        return 1
-    names = list(getattr(usability_scores, "channel_names", ()))
-    for index, name in enumerate(names):
-        if eeg_channel.replace("EEG_", "").lower() in str(name).lower():
-            return index
-    raise ValueError(f"No usability channel mapping for EEG channel {eeg_channel!r}")
 
 
 def _artifact_any_channel_mask(usability_scores: object) -> np.ndarray:
@@ -317,30 +305,22 @@ def _draw_spectrogram(
     _apply_shared_xlim(ax, duration_h)
 
 
-def plot_channel_overview(
+def plot_raw_traces(
     recording: object,
-    channel: str,
-    usability_scores: object,
-    usability_channel_idx: int,
-    model_key: str,
+    channels: list[str],
     *,
     t0_ns: float | None = None,
     duration_h: float | None = None,
+    usability_scores: object | None = None,
 ) -> Figure:
-    """Aligned signal, spectrogram, and artifact-label panels for one EEG channel."""
-    fig, axes = plt.subplots(
-        3,
-        1,
-        figsize=(12, 7),
-        sharex=True,
-        gridspec_kw={"height_ratios": [1.2, 1.6, 0.9]},
-    )
-    signal_ax, spec_ax, artifact_ax = axes
-
+    """Stacked multi-channel raw traces (PSG-style). No spectrogram."""
+    n = max(1, len(channels))
+    fig, axes = plt.subplots(n, 1, figsize=(12, max(2.5, 1.8 * n)), sharex=True, squeeze=False)
     origin = float(recording.timestamps[0] if t0_ns is None else t0_ns)
+    times_h = _time_axis_hours(recording.timestamps, t0_ns=origin)
 
-    if channel not in recording.channel_index_map or recording.sample_rate is None:
-        for ax in axes:
+    for ax, channel in zip(axes.ravel(), channels, strict=False):
+        if channel not in recording.channel_index_map:
             ax.text(
                 0.5,
                 0.5,
@@ -349,37 +329,93 @@ def plot_channel_overview(
                 va="center",
                 transform=ax.transAxes,
             )
+            continue
+        idx = recording.channel_index_map[channel]
+        signal = np.asarray(recording.values[:, idx]).squeeze()
+        plot_times, plot_signal = _downsample_series(times_h, signal)
+        if usability_scores is not None:
+            _overlay_usability_spans(
+                ax,
+                usability_scores,
+                t0_ns=origin,
+                mask=_artifact_any_channel_mask(usability_scores),
+                alpha=0.35,
+            )
+        ax.plot(plot_times, plot_signal, color="black", linewidth=0.4, alpha=0.85)
+        ax.set_ylabel(channel, fontsize=9)
+        ax.grid(True, axis="x", alpha=0.25)
+        _apply_shared_xlim(ax, duration_h)
+
+    axes.ravel()[-1].set_xlabel("Time (h)")
+    fig.suptitle("Raw traces", fontsize=12, y=1.01)
+    fig.tight_layout()
+    return fig
+
+
+def plot_spectrogram(
+    recording: object,
+    channel: str,
+    *,
+    t0_ns: float | None = None,
+    duration_h: float | None = None,
+) -> Figure:
+    """Spectrogram for a single channel."""
+    fig = _figure(figsize=(12, 3.5))
+    ax = fig.gca()
+    if channel not in recording.channel_index_map or recording.sample_rate is None:
+        ax.text(
+            0.5,
+            0.5,
+            f"Channel {channel!r} unavailable",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
         fig.tight_layout()
         return fig
 
     idx = recording.channel_index_map[channel]
     signal = np.asarray(recording.values[:, idx]).squeeze()
-    times_h = _time_axis_hours(recording.timestamps, t0_ns=origin)
-    plot_times, plot_signal = _downsample_series(times_h, signal)
+    _draw_spectrogram(ax, signal, float(recording.sample_rate), duration_h=duration_h)
+    ax.set_ylabel("Hz")
+    ax.set_xlabel("Time (h)")
+    ax.set_title(f"Spectrogram — {channel}")
+    fig.tight_layout()
+    return fig
 
-    signal_ax.plot(plot_times, plot_signal, color="black", linewidth=0.4, alpha=0.85)
-    signal_ax.set_ylabel("µV")
-    signal_ax.set_title("Signal")
-    signal_ax.grid(True, axis="x", alpha=0.25)
-    _apply_shared_xlim(signal_ax, duration_h)
 
-    _draw_spectrogram(spec_ax, signal, float(recording.sample_rate), duration_h=duration_h)
-    spec_ax.set_ylabel("Hz")
-    spec_ax.set_title("Spectrogram")
-
-    label_map = _usability_label_map(model_key)
+def plot_artifact_timeline(
+    usability_scores: object,
+    model_key: str,
+    *,
+    t0_ns: float | None = None,
+    duration_h: float | None = None,
+) -> Figure:
+    """Compact per-channel artifact label step plot."""
+    channel_names = list(usability_scores.channel_names)
+    n = max(1, len(channel_names))
+    fig, axes = plt.subplots(n, 1, figsize=(12, max(2.0, 1.4 * n)), sharex=True, squeeze=False)
+    origin = float(usability_scores.timestamps[0] if t0_ns is None else t0_ns)
     art_times = _time_axis_hours(usability_scores.timestamps, t0_ns=origin)
-    art_labels = usability_scores.values[:, usability_channel_idx].astype(int)
-    if art_times.size:
-        artifact_ax.step(art_times, art_labels, where="mid", color="steelblue", linewidth=1.2)
-    artifact_ax.set_yticks(sorted(label_map))
-    artifact_ax.set_yticklabels([label_map[i] for i in sorted(label_map)], fontsize="small")
-    artifact_ax.set_ylabel("Artifact")
-    artifact_ax.set_title("Artifact labels")
-    artifact_ax.set_xlabel("Time (h)")
-    artifact_ax.grid(True, axis="x", alpha=0.3)
-    _apply_shared_xlim(artifact_ax, duration_h)
+    label_map = _usability_label_map(model_key)
 
+    for ax, channel, col in zip(
+        axes.ravel(),
+        channel_names,
+        range(len(channel_names)),
+        strict=False,
+    ):
+        art_labels = usability_scores.values[:, col].astype(int)
+        if art_times.size:
+            ax.step(art_times, art_labels, where="mid", color="steelblue", linewidth=1.2)
+        ax.set_yticks(sorted(label_map))
+        ax.set_yticklabels([label_map[i] for i in sorted(label_map)], fontsize="small")
+        ax.set_ylabel(str(channel), fontsize=9)
+        ax.grid(True, axis="x", alpha=0.3)
+        _apply_shared_xlim(ax, duration_h)
+
+    axes.ravel()[-1].set_xlabel("Time (h)")
+    fig.suptitle("Artifacts", fontsize=12, y=1.01)
     fig.tight_layout()
     return fig
 
@@ -527,7 +563,6 @@ def _plot_edge_overview(
         alpha=0.2,
     )
 
-    # Number markers at each match onset for cross-reference with zoom cards.
     for index, event in enumerate(edge.sequences[:MAX_ZOOM_PANELS_PER_EDGE], start=1):
         onset_s = (event.onset - window_start_ns) / 1e9
         ax.axvline(onset_s, color=MATCH_HIGHLIGHT_COLOR, linewidth=0.9, alpha=0.7, zorder=3)
@@ -658,7 +693,6 @@ def _add_edge_section(
         section_title=section_title,
     )
 
-    # Shared y-limits across zooms in this section for easier comparison.
     signals = _edge_channel_signals(edge, left_channel, right_channel)
     shared_ylim: tuple[float, float] | None = None
     if signals is not None:
@@ -740,39 +774,60 @@ def plot_eye_movements(
 
 
 def build_plots(result: AnalysisResult) -> dict[str, Figure]:
-    """Build per-channel EEG panels plus sleep and eye-movement plots.
+    """Build enabled view figures from an analysis result.
 
     Full-recording plots share the recording start as time origin and the same
     x-axis span so they line up when compared visually.
     """
     config = result.config
     t0_ns, duration_h = _recording_time_span(result.recording)
-    eeg_channels = list(result.eeg_channels) or available_eeg_channels(config, result.recording)
-
     plots: dict[str, Figure] = {}
-    for channel in eeg_channels:
-        usability_idx = _usability_channel_index(result.usability_scores, channel, config)
-        plots[f"channel_{channel}"] = plot_channel_overview(
+
+    if config.raw_channels:
+        plots["raw_traces"] = plot_raw_traces(
+            result.recording,
+            list(config.raw_channels),
+            t0_ns=t0_ns,
+            duration_h=duration_h,
+            usability_scores=result.usability_scores,
+        )
+
+    for channel in config.spectrogram_channels:
+        plots[f"spectrogram_{channel}"] = plot_spectrogram(
             result.recording,
             channel,
+            t0_ns=t0_ns,
+            duration_h=duration_h,
+        )
+
+    if result.usability_scores is not None:
+        plots["artifacts"] = plot_artifact_timeline(
             result.usability_scores,
-            usability_idx,
             config.usability_model,
             t0_ns=t0_ns,
             duration_h=duration_h,
         )
 
-    plots["sleep_scoring"] = plot_sleep_scoring(
-        result.hypnodensity,
-        result.hypnogram,
-        t0_ns=t0_ns,
-        duration_h=duration_h,
-        usability_scores=result.usability_scores,
-    )
-    plots["eye_movements"] = plot_eye_movements(
-        result.edge_start,
-        result.edge_end,
-        left_channel=config.eeg_left,
-        right_channel=config.eeg_right,
-    )
+    if result.hypnodensity is not None and result.hypnogram is not None:
+        plots["sleep_scoring"] = plot_sleep_scoring(
+            result.hypnodensity,
+            result.hypnogram,
+            t0_ns=t0_ns,
+            duration_h=duration_h,
+            usability_scores=result.usability_scores,
+        )
+
+    if (
+        result.edge_start is not None
+        and result.edge_end is not None
+        and config.eye_left is not None
+        and config.eye_right is not None
+    ):
+        plots["eye_movements"] = plot_eye_movements(
+            result.edge_start,
+            result.edge_end,
+            left_channel=config.eye_left,
+            right_channel=config.eye_right,
+        )
+
     return plots

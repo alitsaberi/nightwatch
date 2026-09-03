@@ -12,7 +12,7 @@ matplotlib.use("Agg")
 import numpy as np
 from matplotlib.figure import Figure
 
-from somnio.data import Epochs, Event, TimeSeries
+from somnio.data import Epochs, TimeSeries
 
 from nightwatch.config import AnalysisConfig
 from nightwatch.metrics import compute_metrics
@@ -48,7 +48,7 @@ def _make_result() -> AnalysisResult:
     usability = TimeSeries(
         values=np.array([[0, 1], [2, 0]], dtype=np.float64),
         timestamps=timestamps[::512][:2],
-        channel_names=("usability_left", "usability_right"),
+        channel_names=("EEG_L", "EEG_R"),
         units=("1", "1"),
         sample_rate=0.1,
     )
@@ -61,12 +61,19 @@ def _make_result() -> AnalysisResult:
     config = AnalysisConfig(
         recording_path=Path("/tmp/recording"),
         model_path=Path("/tmp/model.onnx"),
+        raw_channels=["EEG_L", "EEG_R"],
+        spectrogram_channels=["EEG_L"],
+        sleep_channels=["EEG_L", "EEG_R"],
+        artifact_eeg_channels=["EEG_L", "EEG_R"],
+        movement_channel="MOVEMENT",
+        eye_left="EEG_L",
+        eye_right="EEG_R",
     )
     return AnalysisResult(
         config=config,
         recording=recording,
         raw_channel_names=("EEG_L", "EEG_R"),
-        eeg_channels=("EEG_L", "EEG_R"),
+        sleep_channels=("EEG_L", "EEG_R"),
         hypnodensity=hypnodensity,
         hypnogram=hypnogram,
         usability_scores=usability,
@@ -89,10 +96,41 @@ def test_render_produces_self_contained_html() -> None:
     assert "Total sleep time (TST)" in html
     assert "data:image/png;base64," in html
     assert "Sleep scoring" in html
-    assert "EEG Left" in html
-    assert "EEG Right" in html
+    assert "Raw traces" in html
+    assert "Spectrogram — EEG_L" in html
     assert "Eye movements" in html
     assert "No matching eye-movement sequences" in html
+
+
+def test_render_omits_skipped_sections() -> None:
+    recording = _make_result().recording
+    config = AnalysisConfig(
+        recording_path=Path("/tmp/rec.edf"),
+        format="edf",
+        raw_channels=["EEG_L"],
+    )
+    result = AnalysisResult(
+        config=config,
+        recording=recording,
+        raw_channel_names=("EEG_L", "EEG_R"),
+        sleep_channels=(),
+        hypnodensity=None,
+        hypnogram=None,
+        usability_scores=None,
+        usability_samples_to_keep=None,
+        usability_epoch_length=None,
+        edge_start=None,
+        edge_end=None,
+    )
+    metrics = compute_metrics(result)
+    plots = build_plots(result)
+    html = render(metrics, plots)
+
+    assert "Recording" in html
+    assert "Total sleep time (TST)" not in html
+    assert "Artifacts (EEG usability)" not in html
+    assert "Eye movements" not in html
+    assert "Raw traces" in html
 
 
 def test_render_accepts_empty_plots() -> None:

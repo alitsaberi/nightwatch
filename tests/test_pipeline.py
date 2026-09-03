@@ -11,7 +11,7 @@ import pytest
 
 from somnio.data import Epochs, Event, TimeSeries
 
-from nightwatch.config import AnalysisConfig
+from nightwatch.config import AnalysisConfig, apply_zmax_view_defaults
 from nightwatch.load import LoadedRecording
 from nightwatch.pipeline import (
     UNUSABLE_LABEL,
@@ -19,10 +19,10 @@ from nightwatch.pipeline import (
     EdgeEyeMovementResult,
     _detect_edge_eye_movements,
     _prepare_sleep_scoring_channel,
-    available_eeg_channels,
     edge_window_sample_count,
     hypnogram_from_hypnodensity,
     mark_unusable_hypnogram_epochs,
+    require_channels,
     run_analysis,
     slice_edge_windows,
     soft_fuse_hypnodensities,
@@ -33,17 +33,17 @@ def _make_recording(
     *,
     n: int = 256 * 60 * 10,
     sample_rate: float = 256.0,
+    channel_names: tuple[str, ...] = ("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z", "MOVEMENT"),
 ) -> TimeSeries:
     step = int(round(1e9 / sample_rate))
     base = int(datetime(2021, 6, 15, tzinfo=timezone.utc).timestamp() * 1e9)
     timestamps = np.arange(n, dtype=np.int64) * step + base
-    channel_names = ("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z", "MOVEMENT")
     values = np.random.default_rng(0).random((n, len(channel_names)))
     return TimeSeries(
         values=values,
         timestamps=timestamps,
         channel_names=channel_names,
-        units=tuple("uV" if name.startswith("EEG") else "1" for name in channel_names),
+        units=tuple("uV" if "EEG" in name or name.startswith("C") else "1" for name in channel_names),
         sample_rate=sample_rate,
     )
 
@@ -102,10 +102,6 @@ def test_slice_edge_windows_raises_on_empty_recording() -> None:
 
 def test_detect_edge_eye_movements_passes_only_eeg_channels() -> None:
     recording = _make_recording()
-    config = AnalysisConfig(
-        recording_path=Path("recording"),
-        model_path=Path("model.onnx"),
-    )
 
     with patch(
         "nightwatch.pipeline.detect_lr_eye_movements",
@@ -113,27 +109,41 @@ def test_detect_edge_eye_movements_passes_only_eeg_channels() -> None:
     ) as detect_mock:
         result = _detect_edge_eye_movements(
             recording,
-            config,
+            left="EEG_L",
+            right="EEG_R",
             edge_minutes=10.0,
+            pattern=r"^(?!.*([LR])\1)[LR]{3,}$",
             at_start=True,
         )
 
     passed_ts = detect_mock.call_args.args[0]
     assert list(passed_ts.channel_names) == ["EEG_L", "EEG_R"]
-    assert detect_mock.call_args.kwargs["accepted_pattern"] == config.eye_movement_pattern
     assert result.window.n_samples == edge_window_sample_count(recording, 10.0)
 
 
-def test_available_eeg_channels_returns_present_only() -> None:
+def test_require_channels_lists_available() -> None:
     recording = _make_recording()
-    config = AnalysisConfig(
-        recording_path=Path("recording"),
-        model_path=Path("model.onnx"),
-    )
-    assert available_eeg_channels(config, recording) == ["EEG_L", "EEG_R"]
+    with pytest.raises(ValueError, match="Available: EEG_L"):
+        require_channels(recording, ["missing_ch"])
 
-    left_only = recording.select_channels(["EEG_L", "MOVEMENT"])
-    assert available_eeg_channels(config, left_only) == ["EEG_L"]
+
+def test_apply_zmax_view_defaults_fills_empty() -> None:
+    config = AnalysisConfig(recording_path=Path("rec"), format="zmax")
+    filled = apply_zmax_view_defaults(
+        config,
+        ("EEG_L", "EEG_R", "MOVEMENT"),
+    )
+    assert filled.raw_channels == ["EEG_L", "EEG_R"]
+    assert filled.sleep_channels == ["EEG_L", "EEG_R"]
+    assert filled.movement_channel == "MOVEMENT"
+    assert filled.eye_left == "EEG_L"
+
+
+def test_apply_zmax_view_defaults_skips_edf() -> None:
+    config = AnalysisConfig(recording_path=Path("rec.edf"), format="edf")
+    filled = apply_zmax_view_defaults(config, ("C3", "C4"))
+    assert filled.raw_channels == []
+    assert filled.sleep_channels == []
 
 
 def test_prepare_sleep_scoring_channel_requires_one_channel_model() -> None:
@@ -194,7 +204,6 @@ def test_soft_fuse_hypnodensities_averages_probabilities() -> None:
 
 def test_hypnogram_from_hypnodensity_aggregates_to_30s() -> None:
     onset = 1_000_000_000_000
-    # Two predictions inside first 30s epoch favoring N2, one in second favoring W.
     timestamps = np.array(
         [onset, onset + 10_000_000_000, onset + 40_000_000_000],
         dtype=np.int64,
@@ -226,8 +235,6 @@ def test_mark_unusable_hypnogram_epochs_requires_two_good_windows() -> None:
         period_length=30_000_000_000,
         onset=onset,
     )
-    # Epoch 0: midpoints at 5/15/25s → labels good,bad,good → 2 usable → keep
-    # Epoch 1: midpoints at 35/45/55s → bad,bad,good → 1 usable → Unusable
     usability = TimeSeries(
         values=np.array(
             [
@@ -251,7 +258,7 @@ def test_mark_unusable_hypnogram_epochs_requires_two_good_windows() -> None:
             ],
             dtype=np.int64,
         ),
-        channel_names=("usability_left", "usability_right"),
+        channel_names=("EEG_L", "EEG_R"),
         units=("1", "1"),
         sample_rate=0.1,
     )
@@ -268,6 +275,7 @@ def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
     config = AnalysisConfig(
         recording_path=recording_path,
         model_path=model_path,
+        format="zmax",
     )
     recording = _make_recording()
     hypnodensity_left = TimeSeries(
@@ -285,10 +293,10 @@ def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
         sample_rate=1.0 / 30.0,
     )
     usability = TimeSeries(
-        values=np.zeros((5, 2), dtype=np.int64),
+        values=np.zeros((5, 1), dtype=np.int64),
         timestamps=recording.timestamps[::512][:5],
-        channel_names=("usability_left", "usability_right"),
-        units=("1", "1"),
+        channel_names=("EEG_L",),
+        units=("1",),
         sample_rate=0.1,
     )
     edge_result = EdgeEyeMovementResult(
@@ -316,9 +324,9 @@ def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
             "nightwatch.pipeline.score_sleep_stages",
             side_effect=[hypnodensity_left, hypnodensity_right],
         ) as score_mock,
-        patch("nightwatch.pipeline.load_usability_model", return_value=object()) as usability_load_mock,
+        patch("nightwatch.pipeline.load_usability_model", return_value=object()),
         patch(
-            "nightwatch.pipeline.get_usability_scores",
+            "nightwatch.pipeline.get_usability_score",
             return_value=(usability, recording.n_samples, 2560),
         ) as usability_mock,
         patch(
@@ -332,29 +340,78 @@ def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
     ):
         result = run_analysis(config)
 
-    load_mock.assert_called_once_with(config)
+    load_mock.assert_called_once()
     sleep_load_mock.assert_called_once_with(model_path)
     assert score_mock.call_count == 2
-    usability_load_mock.assert_called_once_with("lite")
-    usability_mock.assert_called_once()
+    assert usability_mock.call_count == 2
     assert edge_mock.call_count == 2
 
     assert isinstance(result, AnalysisResult)
     assert result.recording is recording
     assert result.raw_channel_names == loaded.raw_channel_names
-    assert result.eeg_channels == ("EEG_L", "EEG_R")
+    assert result.sleep_channels == ("EEG_L", "EEG_R")
     np.testing.assert_allclose(result.hypnodensity.values, [[0.5, 0.5], [0.5, 0.5]])
-    assert result.usability_scores is usability
-    assert result.usability_samples_to_keep == recording.n_samples
-    assert result.usability_epoch_length == 2560
+    assert result.usability_scores is not None
+    assert list(result.usability_scores.channel_names) == ["EEG_L", "EEG_R"]
     assert result.edge_start is edge_result
     assert result.edge_end is edge_result
 
 
-def test_run_analysis_missing_model_raises(tmp_path: Path) -> None:
+def test_run_analysis_skips_all_views_for_empty_edf_config(tmp_path: Path) -> None:
+    edf_path = tmp_path / "rec.edf"
+    edf_path.write_bytes(b"edf")
+    recording = _make_recording(channel_names=("C3", "C4", "ACC"))
+    loaded = LoadedRecording(timeseries=recording, raw_channel_names=("C3", "C4", "ACC"))
+    config = AnalysisConfig(recording_path=edf_path, format="edf")
+
+    with patch("nightwatch.pipeline.load_recording", return_value=loaded):
+        result = run_analysis(config)
+
+    assert result.hypnodensity is None
+    assert result.hypnogram is None
+    assert result.usability_scores is None
+    assert result.edge_start is None
+    assert result.edge_end is None
+    assert result.sleep_channels == ()
+
+
+def test_run_analysis_sleep_requires_model(tmp_path: Path) -> None:
+    edf_path = tmp_path / "rec.edf"
+    edf_path.write_bytes(b"edf")
+    recording = _make_recording(channel_names=("C3", "C4"))
+    loaded = LoadedRecording(timeseries=recording, raw_channel_names=("C3", "C4"))
     config = AnalysisConfig(
-        recording_path=tmp_path / "recording",
-        model_path=tmp_path / "missing.onnx",
+        recording_path=edf_path,
+        format="edf",
+        sleep_channels=["C3"],
+        model_path=None,
     )
-    with pytest.raises(FileNotFoundError):
-        run_analysis(config)
+
+    with patch("nightwatch.pipeline.load_recording", return_value=loaded):
+        with pytest.raises(ValueError, match="model_path"):
+            run_analysis(config)
+
+
+def test_run_analysis_missing_model_raises(tmp_path: Path) -> None:
+    recording_path = tmp_path / "recording"
+    recording_path.mkdir()
+    recording = _make_recording()
+    loaded = LoadedRecording(
+        timeseries=recording,
+        raw_channel_names=("EEG_L", "EEG_R"),
+    )
+    config = AnalysisConfig(
+        recording_path=recording_path,
+        model_path=tmp_path / "missing.onnx",
+        format="zmax",
+        sleep_channels=["EEG_L"],
+        raw_channels=[],
+        spectrogram_channels=[],
+        artifact_eeg_channels=[],
+        movement_channel=None,
+        eye_left=None,
+        eye_right=None,
+    )
+    with patch("nightwatch.pipeline.load_recording", return_value=loaded):
+        with pytest.raises(FileNotFoundError):
+            run_analysis(config)

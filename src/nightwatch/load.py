@@ -11,10 +11,8 @@ import numpy as np
 from somnio.data.timeseries import TimeSeries
 from somnio.data.units import UV, Dimension, convert_values
 from somnio.io.edf import read_standard, read_zmax_multi
-from somnio.tasks.eeg_usability.defaults import SAMPLE_RATE_HZ
-from somnio.transforms.resample import apply_resample
 
-from nightwatch.config import AnalysisConfig
+from nightwatch.config import AnalysisConfig, ZMAX_DEFAULT_MOVEMENT
 
 ZMAX_STEM_ALIASES: Final[dict[str, str]] = {
     "EEG L": "EEG_L",
@@ -68,7 +66,7 @@ def derive_movement(
     acc_x: str = ZMAX_ACC_CHANNELS[0],
     acc_y: str = ZMAX_ACC_CHANNELS[1],
     acc_z: str = ZMAX_ACC_CHANNELS[2],
-    movement: str = "MOVEMENT",
+    movement: str = ZMAX_DEFAULT_MOVEMENT,
 ) -> TimeSeries:
     """Derive accelerometer magnitude and append it as a movement channel."""
     missing = [ch for ch in (acc_x, acc_y, acc_z) if ch not in ts.channel_index_map]
@@ -111,23 +109,15 @@ def convert_voltage_channels_to_microvolts(ts: TimeSeries) -> TimeSeries:
     )
 
 
-def _ensure_usability_sample_rate(ts: TimeSeries) -> TimeSeries:
-    """Resample to 256 Hz when needed for EEG usability scoring."""
-    if ts.sample_rate is None:
-        raise ValueError(
-            "Recording has no sample_rate metadata; cannot resample for usability."
-        )
-    if np.isclose(ts.sample_rate, SAMPLE_RATE_HZ, rtol=0.0, atol=1e-6):
-        return ts
-    return apply_resample(ts, SAMPLE_RATE_HZ)
-
-
 def load_zmax_recording(
     path: Path | str,
     *,
-    movement: str = "MOVEMENT",
+    movement: str = ZMAX_DEFAULT_MOVEMENT,
 ) -> LoadedRecording:
-    """Load a ZMax multi-EDF directory with aliases and derived movement."""
+    """Load a ZMax multi-EDF directory with aliases and derived movement.
+
+    Does not resample; usability resampling happens in the artifact task.
+    """
     root = Path(path)
     if not root.is_dir():
         raise NotADirectoryError(root)
@@ -142,7 +132,7 @@ def load_zmax_recording(
     ts = convert_voltage_channels_to_microvolts(ts)
     ts = derive_movement(ts, movement=movement)
     return LoadedRecording(
-        timeseries=_ensure_usability_sample_rate(ts),
+        timeseries=ts,
         raw_channel_names=raw_channel_names,
     )
 
@@ -171,7 +161,8 @@ def load_recording(config: AnalysisConfig) -> LoadedRecording:
         raise FileNotFoundError(path)
 
     if config.format == "zmax":
-        return load_zmax_recording(path, movement=config.movement)
+        movement = config.movement_channel or ZMAX_DEFAULT_MOVEMENT
+        return load_zmax_recording(path, movement=movement)
     if config.format == "edf":
         return load_edf_recording(path)
 

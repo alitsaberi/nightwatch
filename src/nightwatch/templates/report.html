@@ -23,9 +23,9 @@
   <p class="meta"><strong>Recording:</strong> {{ recording_path }}</p>
 
   {% set rec = metrics.recording %}
-  {% set sleep = metrics.sleep %}
-  {% set artifacts = metrics.artifacts %}
-  {% set em = metrics.eye_movement %}
+  {% set sleep = metrics.get("sleep") %}
+  {% set artifacts = metrics.get("artifacts") %}
+  {% set em = metrics.get("eye_movement") %}
 
   <section class="section">
     <h2>Recording</h2>
@@ -41,6 +41,7 @@
     </table>
   </section>
 
+  {% if sleep %}
   <section class="section">
     <h2>Sleep</h2>
     <table>
@@ -73,42 +74,38 @@
     </table>
     {% endif %}
   </section>
+  {% endif %}
 
+  {% if artifacts %}
   <section class="section">
     <h2>Artifacts (EEG usability)</h2>
     <table>
       <tbody>
-        <tr><th>Usable epochs (left)</th><td>{{ artifacts.usable_epoch_pct_left | pct }}</td></tr>
-        <tr><th>Usable epochs (right)</th><td>{{ artifacts.usable_epoch_pct_right | pct }}</td></tr>
         <tr><th>Samples to keep</th><td>{{ artifacts.samples_to_keep }} / {{ artifacts.samples_total }} ({{ artifacts.samples_to_keep_pct | pct }})</td></tr>
         <tr><th>Usability epoch length</th><td>{{ artifacts.epoch_length_seconds | fmt(1) }} s</td></tr>
       </tbody>
     </table>
 
-    <h3>Left electrode</h3>
+    {% for channel, labels in artifacts.channels.items() %}
+    <h3>{{ channel }}</h3>
+    <p>Usable epochs: {{ artifacts.usable_epoch_pct[channel] | pct }}</p>
     <table>
       <thead><tr><th>Label</th><th>Percent</th></tr></thead>
       <tbody>
-        {% for label, pct_val in artifacts.left.items() | sort %}
+        {% for label, pct_val in labels.items() | sort %}
         <tr><td>{{ label }}</td><td>{{ pct_val | pct }}</td></tr>
         {% endfor %}
       </tbody>
     </table>
-
-    <h3>Right electrode</h3>
-    <table>
-      <thead><tr><th>Label</th><th>Percent</th></tr></thead>
-      <tbody>
-        {% for label, pct_val in artifacts.right.items() | sort %}
-        <tr><td>{{ label }}</td><td>{{ pct_val | pct }}</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    {% endfor %}
   </section>
+  {% endif %}
 
+  {% if em %}
   <section class="section">
     <h2>Eye movements (edge windows)</h2>
     <p>Edge window length: {{ em.edge_minutes | fmt(1) }} min (start and end)</p>
+    <p>Channels: <code>{{ em.left }}</code> / <code>{{ em.right }}</code></p>
     <p>Sequence pattern: <code>{{ em.pattern }}</code></p>
 
     {% if not em.has_matches %}
@@ -140,7 +137,9 @@
     {% endfor %}
     {% endif %}
   </section>
+  {% endif %}
 
+  {% if plots %}
   <section class="section">
     <h2>Plots</h2>
     {% for plot in plots %}
@@ -150,5 +149,6 @@
     </div>
     {% endfor %}
   </section>
+  {% endif %}
 </body>
 </html>

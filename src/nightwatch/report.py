@@ -12,49 +12,50 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from matplotlib.figure import Figure
 
 PLOT_TITLES: dict[str, str] = {
+    "raw_traces": "Raw traces",
+    "artifacts": "Artifacts",
     "sleep_scoring": "Sleep scoring",
     "eye_movements": "Eye movements",
 }
 
 PLOT_ORDER: tuple[str, ...] = (
+    "raw_traces",
+    "artifacts",
     "sleep_scoring",
     "eye_movements",
 )
 
-CHANNEL_TITLE_BY_SUFFIX: dict[str, str] = {
-    "EEG_L": "EEG Left",
-    "EEG_R": "EEG Right",
-}
-
 
 def plot_display_order(plots: dict[str, Figure]) -> list[str]:
-    """Return plot keys: EEG Left/Right blocks first, then sleep scoring and edges."""
-    preferred_channels = ("channel_EEG_L", "channel_EEG_R")
-    channel_keys = [key for key in preferred_channels if key in plots]
-    channel_keys.extend(
-        sorted(key for key in plots if key.startswith("channel_") and key not in channel_keys)
-    )
+    """Return plot keys: fixed views first, then spectrograms, then extras."""
     ordered = [key for key in PLOT_ORDER if key in plots]
-    extras = [key for key in plots if key not in channel_keys and key not in ordered]
-    return channel_keys + ordered + extras
+    spectrogram_keys = sorted(key for key in plots if key.startswith("spectrogram_"))
+    extras = [
+        key
+        for key in plots
+        if key not in ordered and key not in spectrogram_keys
+    ]
+    # Insert spectrograms after raw traces when present.
+    if "raw_traces" in ordered:
+        idx = ordered.index("raw_traces") + 1
+        ordered = ordered[:idx] + spectrogram_keys + ordered[idx:]
+    else:
+        ordered = spectrogram_keys + ordered
+    return ordered + extras
 
 
 def plot_title(key: str) -> str:
     """Human-readable title for a plot key."""
     if key in PLOT_TITLES:
         return PLOT_TITLES[key]
-    if key.startswith("channel_"):
-        suffix = key.removeprefix("channel_")
-        return CHANNEL_TITLE_BY_SUFFIX.get(suffix, suffix.replace("_", " "))
+    if key.startswith("spectrogram_"):
+        channel = key.removeprefix("spectrogram_")
+        return f"Spectrogram — {channel}"
     return key.replace("_", " ").title()
 
 
 def _default_template_dir() -> Path:
-    package_dir = Path(__file__).resolve().parent
-    package_templates = package_dir / "templates"
-    if package_templates.is_dir():
-        return package_templates
-    return package_dir.parent.parent / "templates"
+    return Path(__file__).resolve().parent / "templates"
 
 
 def _figure_to_png_base64(fig: Figure) -> str:

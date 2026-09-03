@@ -6,7 +6,11 @@ from dataclasses import dataclass
 
 import numpy as np
 from somnio.data import Epochs, Event, TimeSeries
-from somnio.tasks.eeg_usability import get_usability_scores, load_model as load_usability_model
+from somnio.tasks.eeg_usability import (
+    get_usability_score,
+    load_model as load_usability_model,
+)
+from somnio.tasks.eeg_usability.defaults import SAMPLE_RATE_HZ
 from somnio.tasks.eye_movement_detection import detect_lr_eye_movements
 from somnio.tasks.sleep_scoring import score_sleep_stages
 from somnio.tasks.sleep_scoring.models import OnnxSleepScoringModel
@@ -16,7 +20,7 @@ from somnio.transforms.filter import apply_fir_filter
 from somnio.transforms.resample import apply_resample
 from somnio.transforms.scale import apply_scale
 
-from nightwatch.config import AnalysisConfig
+from nightwatch.config import AnalysisConfig, apply_zmax_view_defaults
 from nightwatch.load import load_recording
 
 SLEEP_EPOCH_NS = 30_000_000_000
@@ -36,34 +40,36 @@ class EdgeEyeMovementResult:
 
 @dataclass
 class AnalysisResult:
-    """Outputs from a completed analysis run."""
+    """Outputs from a completed analysis run.
+
+    Optional fields are ``None`` when that view was skipped.
+    """
 
     config: AnalysisConfig
     recording: TimeSeries
     raw_channel_names: tuple[str, ...]
-    eeg_channels: tuple[str, ...]
-    hypnodensity: TimeSeries
-    hypnogram: Epochs
-    usability_scores: TimeSeries
-    usability_samples_to_keep: int
-    usability_epoch_length: int
-    edge_start: EdgeEyeMovementResult
-    edge_end: EdgeEyeMovementResult
+    sleep_channels: tuple[str, ...]
+    hypnodensity: TimeSeries | None
+    hypnogram: Epochs | None
+    usability_scores: TimeSeries | None
+    usability_samples_to_keep: int | None
+    usability_epoch_length: int | None
+    edge_start: EdgeEyeMovementResult | None
+    edge_end: EdgeEyeMovementResult | None
 
 
-def available_eeg_channels(config: AnalysisConfig, recording: TimeSeries) -> list[str]:
-    """Return configured EEG channels that are present in the recording."""
-    channels = [
-        name
-        for name in (config.eeg_left, config.eeg_right)
-        if name in recording.channel_index_map
-    ]
-    if not channels:
+def _available_names(recording: TimeSeries) -> str:
+    return ", ".join(recording.channel_names) or "(none)"
+
+
+def require_channels(recording: TimeSeries, names: list[str] | tuple[str, ...]) -> None:
+    """Raise if any requested channel is missing from the recording."""
+    missing = [name for name in names if name not in recording.channel_index_map]
+    if missing:
         raise ValueError(
-            f"Recording has none of the configured EEG channels "
-            f"({config.eeg_left!r}, {config.eeg_right!r})."
+            f"Recording is missing channel(s) {missing}. "
+            f"Available: {_available_names(recording)}"
         )
-    return channels
 
 
 def _prepare_sleep_scoring_channel(
@@ -73,7 +79,10 @@ def _prepare_sleep_scoring_channel(
 ) -> TimeSeries:
     """Select one EEG channel and apply sleep-scoring preprocessing."""
     if channel not in ts.channel_index_map:
-        raise ValueError(f"Recording is missing sleep-scoring channel: {channel!r}")
+        raise ValueError(
+            f"Recording is missing sleep-scoring channel: {channel!r}. "
+            f"Available: {_available_names(ts)}"
+        )
     if ts.sample_rate is None:
         raise ValueError("Recording has no sample_rate metadata; cannot score sleep stages.")
     if metadata.n_channels != 1:
@@ -209,20 +218,22 @@ def slice_edge_windows(ts: TimeSeries, edge_minutes: float) -> tuple[TimeSeries,
 
 def _detect_edge_eye_movements(
     ts: TimeSeries,
-    config: AnalysisConfig,
     *,
+    left: str,
+    right: str,
     edge_minutes: float,
+    pattern: str,
     at_start: bool,
 ) -> EdgeEyeMovementResult:
     """Run eye-movement detection on the first or last edge window."""
     start_window, end_window = slice_edge_windows(ts, edge_minutes)
     window = start_window if at_start else end_window
-    eeg_window = window.select_channels([config.eeg_left, config.eeg_right])
+    eeg_window = window.select_channels([left, right])
     sequences, primitives = detect_lr_eye_movements(
         eeg_window,
-        left=config.eeg_left,
-        right=config.eeg_right,
-        accepted_pattern=config.eye_movement_pattern,
+        left=left,
+        right=right,
+        accepted_pattern=pattern,
     )
     return EdgeEyeMovementResult(
         window=window,
@@ -231,30 +242,24 @@ def _detect_edge_eye_movements(
     )
 
 
-def run_analysis(config: AnalysisConfig) -> AnalysisResult:
-    """Run sleep scoring, usability, and edge eye-movement detection.
+def _run_sleep_scoring(
+    recording: TimeSeries,
+    config: AnalysisConfig,
+) -> tuple[TimeSeries, Epochs, tuple[str, ...]] | None:
+    """Score sleep stages when sleep channels are configured; else ``None``."""
+    channels = list(config.sleep_channels)
+    if not channels:
+        return None
 
-    Sleep scoring runs independently on each available EEG channel using a
-    1-channel model; hypnodensities are soft-fused (averaged). Hypnogram epochs
-    with fewer than two fully usable 10-second windows are labeled Unusable.
-
-    Args:
-        config: Analysis settings.
-
-    Raises:
-        FileNotFoundError: If the sleep-scoring model path does not exist.
-        ValueError: If required channels are missing or inputs are invalid.
-    """
+    if config.model_path is None:
+        raise ValueError("Sleep scoring requires --model / model_path when sleep_channels is set.")
     if not config.model_path.is_file():
         raise FileNotFoundError(config.model_path)
 
-    loaded = load_recording(config)
-    recording = loaded.timeseries
-    eeg_channels = available_eeg_channels(config, recording)
-
+    require_channels(recording, channels)
     sleep_model = OnnxSleepScoringModel.load(config.model_path)
     per_channel: list[TimeSeries] = []
-    for channel in eeg_channels:
+    for channel in channels:
         sleep_ts = _prepare_sleep_scoring_channel(recording, channel, sleep_model.metadata)
         hypnodensity = score_sleep_stages(
             sleep_ts,
@@ -265,39 +270,140 @@ def run_analysis(config: AnalysisConfig) -> AnalysisResult:
         assert isinstance(hypnodensity, TimeSeries)
         per_channel.append(hypnodensity)
 
-    fused_hypnodensity = soft_fuse_hypnodensities(per_channel)
+    fused = soft_fuse_hypnodensities(per_channel)
     onset_ns = int(recording.timestamps[0]) if recording.n_samples else 0
-    hypnogram = hypnogram_from_hypnodensity(fused_hypnodensity, onset_ns=onset_ns)
+    hypnogram = hypnogram_from_hypnodensity(fused, onset_ns=onset_ns)
+    return fused, hypnogram, tuple(channels)
+
+
+def _run_artifact_detection(
+    recording: TimeSeries,
+    config: AnalysisConfig,
+) -> tuple[TimeSeries, int, int] | None:
+    """Score EEG usability when EEG + movement channels are set; else ``None``."""
+    eeg_channels = list(config.artifact_eeg_channels)
+    movement = config.movement_channel
+    if not eeg_channels or movement is None:
+        return None
+
+    require_channels(recording, [*eeg_channels, movement])
+    selected = recording.select_channels([*eeg_channels, movement])
+    if selected.sample_rate is None:
+        raise ValueError("Recording has no sample_rate metadata; cannot score usability.")
+    if not np.isclose(selected.sample_rate, SAMPLE_RATE_HZ, rtol=0.0, atol=1e-6):
+        selected = apply_resample(selected, SAMPLE_RATE_HZ)
 
     usability_model = load_usability_model(config.usability_model)
-    usability_scores, samples_to_keep, epoch_length = get_usability_scores(
-        recording,
-        usability_model,
-        eeg_left=config.eeg_left,
-        eeg_right=config.eeg_right,
-        movement=config.movement,
-    )
-    hypnogram = mark_unusable_hypnogram_epochs(hypnogram, usability_scores)
+    score_columns: list[np.ndarray] = []
+    samples_to_keep = 0
+    epoch_length = 0
+    timestamps: np.ndarray | None = None
 
+    for eeg in eeg_channels:
+        scores, samples_to_keep, epoch_length = get_usability_score(
+            selected,
+            usability_model,
+            eeg=eeg,
+            movement=movement,
+            output_channel=eeg,
+        )
+        score_columns.append(np.asarray(scores.values).reshape(-1))
+        timestamps = np.asarray(scores.timestamps, dtype=np.int64)
+
+    assert timestamps is not None
+    usability = TimeSeries(
+        values=np.column_stack(score_columns),
+        timestamps=timestamps,
+        channel_names=list(eeg_channels),
+        units=["1"] * len(eeg_channels),
+        sample_rate=scores.sample_rate,
+    )
+    return usability, samples_to_keep, epoch_length
+
+
+def _run_eye_movements(
+    recording: TimeSeries,
+    config: AnalysisConfig,
+) -> tuple[EdgeEyeMovementResult, EdgeEyeMovementResult] | None:
+    """Detect edge eye movements when left and right channels are set."""
+    left = config.eye_left
+    right = config.eye_right
+    if left is None or right is None:
+        return None
+
+    require_channels(recording, [left, right])
     edge_start = _detect_edge_eye_movements(
         recording,
-        config,
+        left=left,
+        right=right,
         edge_minutes=config.edge_minutes,
+        pattern=config.eye_movement_pattern,
         at_start=True,
     )
     edge_end = _detect_edge_eye_movements(
         recording,
-        config,
+        left=left,
+        right=right,
         edge_minutes=config.edge_minutes,
+        pattern=config.eye_movement_pattern,
         at_start=False,
     )
+    return edge_start, edge_end
+
+
+def run_analysis(config: AnalysisConfig) -> AnalysisResult:
+    """Run enabled views: sleep scoring, usability, and edge eye-movement detection.
+
+    Empty channel sets skip that view. Sleep scoring requires ``model_path`` when
+    ``sleep_channels`` is non-empty. ZMax empty-view configs are filled with
+    EEG_L / EEG_R / MOVEMENT defaults after load when those channels exist.
+
+    Args:
+        config: Analysis settings.
+
+    Raises:
+        FileNotFoundError: If the sleep-scoring model path does not exist.
+        ValueError: If required channels are missing or inputs are invalid.
+    """
+    loaded = load_recording(config)
+    recording = loaded.timeseries
+    config = apply_zmax_view_defaults(config, recording.channel_names)
+
+    plot_names = list(dict.fromkeys([*config.raw_channels, *config.spectrogram_channels]))
+    if plot_names:
+        require_channels(recording, plot_names)
+
+    sleep_out = _run_sleep_scoring(recording, config)
+    if sleep_out is None:
+        hypnodensity: TimeSeries | None = None
+        hypnogram: Epochs | None = None
+        sleep_channels: tuple[str, ...] = ()
+    else:
+        hypnodensity, hypnogram, sleep_channels = sleep_out
+
+    artifact_out = _run_artifact_detection(recording, config)
+    if artifact_out is None:
+        usability_scores: TimeSeries | None = None
+        samples_to_keep: int | None = None
+        epoch_length: int | None = None
+    else:
+        usability_scores, samples_to_keep, epoch_length = artifact_out
+        if hypnogram is not None:
+            hypnogram = mark_unusable_hypnogram_epochs(hypnogram, usability_scores)
+
+    eye_out = _run_eye_movements(recording, config)
+    if eye_out is None:
+        edge_start: EdgeEyeMovementResult | None = None
+        edge_end: EdgeEyeMovementResult | None = None
+    else:
+        edge_start, edge_end = eye_out
 
     return AnalysisResult(
         config=config,
         recording=recording,
         raw_channel_names=loaded.raw_channel_names,
-        eeg_channels=tuple(eeg_channels),
-        hypnodensity=fused_hypnodensity,
+        sleep_channels=sleep_channels,
+        hypnodensity=hypnodensity,
         hypnogram=hypnogram,
         usability_scores=usability_scores,
         usability_samples_to_keep=samples_to_keep,

@@ -39,7 +39,7 @@ def _make_result() -> AnalysisResult:
     usability = TimeSeries(
         values=np.array([[0, 0], [2, 1], [0, 4], [1, 0]], dtype=np.float64),
         timestamps=recording.timestamps[::512][:4],
-        channel_names=("usability_left", "usability_right"),
+        channel_names=("EEG_L", "EEG_R"),
         units=("1", "1"),
         sample_rate=0.1,
     )
@@ -52,6 +52,13 @@ def _make_result() -> AnalysisResult:
     config = AnalysisConfig(
         recording_path="/tmp/recording",
         model_path="/tmp/model.onnx",
+        raw_channels=["EEG_L", "EEG_R"],
+        spectrogram_channels=["EEG_L", "EEG_R"],
+        sleep_channels=["EEG_L", "EEG_R"],
+        artifact_eeg_channels=["EEG_L", "EEG_R"],
+        movement_channel="MOVEMENT",
+        eye_left="EEG_L",
+        eye_right="EEG_R",
     )
     hypnodensity = TimeSeries(
         values=np.ones((5, 5)) / 5.0,
@@ -64,7 +71,7 @@ def _make_result() -> AnalysisResult:
         config=config,
         recording=recording,
         raw_channel_names=("EEG_L", "EEG_R"),
-        eeg_channels=("EEG_L", "EEG_R"),
+        sleep_channels=("EEG_L", "EEG_R"),
         hypnodensity=hypnodensity,
         hypnogram=hypnogram,
         usability_scores=usability,
@@ -101,10 +108,10 @@ def test_compute_metrics_sleep_stats() -> None:
 def test_compute_metrics_artifact_percentages() -> None:
     metrics = compute_metrics(_make_result())["artifacts"]
 
-    assert metrics["usable_epoch_pct_left"] == pytest.approx(50.0)
-    assert metrics["usable_epoch_pct_right"] == pytest.approx(50.0)
-    assert metrics["left"]["Good"] == pytest.approx(50.0)
-    assert metrics["right"]["M-shaped Noise"] == pytest.approx(25.0)
+    assert metrics["usable_epoch_pct"]["EEG_L"] == pytest.approx(50.0)
+    assert metrics["usable_epoch_pct"]["EEG_R"] == pytest.approx(50.0)
+    assert metrics["channels"]["EEG_L"]["Good"] == pytest.approx(50.0)
+    assert metrics["channels"]["EEG_R"]["M-shaped Noise"] == pytest.approx(25.0)
     assert metrics["samples_to_keep"] == _make_result().recording.n_samples - 512
 
 
@@ -179,20 +186,45 @@ def test_compute_metrics_binary_usability_labels() -> None:
         recording_path="/tmp/recording",
         model_path="/tmp/model.onnx",
         usability_model="lite_binary",
+        artifact_eeg_channels=["EEG_L", "EEG_R"],
+        movement_channel="MOVEMENT",
     )
     result.usability_scores = TimeSeries(
         values=np.array([[0, 1], [1, 0], [0, 0]], dtype=np.float64),
         timestamps=result.recording.timestamps[:3],
-        channel_names=("usability_left", "usability_right"),
+        channel_names=("EEG_L", "EEG_R"),
         units=("1", "1"),
         sample_rate=1.0,
     )
     artifacts = compute_metrics(result)["artifacts"]
 
-    assert artifacts["left"]["Usable"] == pytest.approx(100.0 * 2 / 3)
-    assert artifacts["right"]["Not Usable"] == pytest.approx(100.0 / 3)
-    assert artifacts["usable_epoch_pct_left"] == pytest.approx(100.0 * 2 / 3)
-    assert artifacts["usable_epoch_pct_right"] == pytest.approx(100.0 * 2 / 3)
+    assert artifacts["channels"]["EEG_L"]["Usable"] == pytest.approx(100.0 * 2 / 3)
+    assert artifacts["channels"]["EEG_R"]["Not Usable"] == pytest.approx(100.0 / 3)
+    assert artifacts["usable_epoch_pct"]["EEG_L"] == pytest.approx(100.0 * 2 / 3)
+    assert artifacts["usable_epoch_pct"]["EEG_R"] == pytest.approx(100.0 * 2 / 3)
+
+
+def test_compute_metrics_omits_skipped_views() -> None:
+    recording = _make_recording()
+    config = AnalysisConfig(recording_path="/tmp/rec.edf", format="edf")
+    result = AnalysisResult(
+        config=config,
+        recording=recording,
+        raw_channel_names=("EEG_L", "EEG_R"),
+        sleep_channels=(),
+        hypnodensity=None,
+        hypnogram=None,
+        usability_scores=None,
+        usability_samples_to_keep=None,
+        usability_epoch_length=None,
+        edge_start=None,
+        edge_end=None,
+    )
+    metrics = compute_metrics(result)
+    assert "recording" in metrics
+    assert "sleep" not in metrics
+    assert "artifacts" not in metrics
+    assert "eye_movement" not in metrics
 
 
 def test_compute_metrics_empty_edge_events() -> None:

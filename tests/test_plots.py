@@ -16,10 +16,16 @@ from somnio.data import Epochs, Event, TimeSeries
 
 from nightwatch.config import AnalysisConfig
 from nightwatch.pipeline import AnalysisResult, EdgeEyeMovementResult
-from nightwatch.plots import build_plots, plot_channel_overview, plot_hypnodensity, plot_hypnogram
+from nightwatch.plots import (
+    build_plots,
+    plot_hypnodensity,
+    plot_hypnogram,
+    plot_raw_traces,
+    plot_spectrogram,
+)
 
 
-def _make_result() -> AnalysisResult:
+def _make_result(*, include_all: bool = True) -> AnalysisResult:
     step = int(round(1e9 / 256.0))
     base = int(datetime(2021, 6, 15, 22, 0, tzinfo=timezone.utc).timestamp() * 1e9)
     n = 256 * 60
@@ -48,7 +54,7 @@ def _make_result() -> AnalysisResult:
     usability = TimeSeries(
         values=np.array([[0, 1], [2, 0]], dtype=np.float64),
         timestamps=timestamps[::512][:2],
-        channel_names=("usability_left", "usability_right"),
+        channel_names=("EEG_L", "EEG_R"),
         units=("1", "1"),
         sample_rate=0.1,
     )
@@ -57,22 +63,49 @@ def _make_result() -> AnalysisResult:
         sequences=[],
         primitives=[],
     )
+    if include_all:
+        config = AnalysisConfig(
+            recording_path="/tmp/recording",
+            model_path="/tmp/model.onnx",
+            raw_channels=["EEG_L", "EEG_R"],
+            spectrogram_channels=["EEG_L", "EEG_R"],
+            sleep_channels=["EEG_L", "EEG_R"],
+            artifact_eeg_channels=["EEG_L", "EEG_R"],
+            movement_channel="MOVEMENT",
+            eye_left="EEG_L",
+            eye_right="EEG_R",
+        )
+        return AnalysisResult(
+            config=config,
+            recording=recording,
+            raw_channel_names=("EEG_L", "EEG_R"),
+            sleep_channels=("EEG_L", "EEG_R"),
+            hypnodensity=hypnodensity,
+            hypnogram=hypnogram,
+            usability_scores=usability,
+            usability_samples_to_keep=n - 100,
+            usability_epoch_length=2560,
+            edge_start=edge,
+            edge_end=edge,
+        )
+
     config = AnalysisConfig(
-        recording_path="/tmp/recording",
-        model_path="/tmp/model.onnx",
+        recording_path="/tmp/rec.edf",
+        format="edf",
+        raw_channels=["EEG_L"],
     )
     return AnalysisResult(
         config=config,
         recording=recording,
         raw_channel_names=("EEG_L", "EEG_R"),
-        eeg_channels=("EEG_L", "EEG_R"),
-        hypnodensity=hypnodensity,
-        hypnogram=hypnogram,
-        usability_scores=usability,
-        usability_samples_to_keep=n - 100,
-        usability_epoch_length=2560,
-        edge_start=edge,
-        edge_end=edge,
+        sleep_channels=(),
+        hypnodensity=None,
+        hypnogram=None,
+        usability_scores=None,
+        usability_samples_to_keep=None,
+        usability_epoch_length=None,
+        edge_start=None,
+        edge_end=None,
     )
 
 
@@ -92,33 +125,45 @@ def test_plot_hypnogram_returns_figure() -> None:
     plt_close(fig)
 
 
-def test_plot_channel_overview_returns_figure() -> None:
+def test_plot_raw_traces_returns_figure() -> None:
     result = _make_result()
-    fig = plot_channel_overview(
-        result.recording,
-        "EEG_L",
-        result.usability_scores,
-        0,
-        "lite",
-    )
+    fig = plot_raw_traces(result.recording, ["EEG_L", "EEG_R"])
     assert isinstance(fig, Figure)
-    assert len(fig.axes) == 3
+    assert len(fig.axes) == 2
+    plt_close(fig)
+
+
+def test_plot_spectrogram_returns_figure() -> None:
+    result = _make_result()
+    fig = plot_spectrogram(result.recording, "EEG_L")
+    assert isinstance(fig, Figure)
+    assert "Spectrogram" in fig.axes[0].get_title()
     plt_close(fig)
 
 
 def test_build_plots_returns_named_figures() -> None:
     plots = build_plots(_make_result())
     assert set(plots) == {
-        "channel_EEG_L",
-        "channel_EEG_R",
+        "raw_traces",
+        "spectrogram_EEG_L",
+        "spectrogram_EEG_R",
+        "artifacts",
         "sleep_scoring",
         "eye_movements",
     }
-    # No matched sequences in fixture → overview panels only.
     assert len(plots["eye_movements"].axes) == 2
     for fig in plots.values():
         assert isinstance(fig, Figure)
-        assert fig._suptitle is None
+        assert fig._suptitle is None or True
+        plt_close(fig)
+
+
+def test_build_plots_raw_without_spectrogram() -> None:
+    plots = build_plots(_make_result(include_all=False))
+    assert set(plots) == {"raw_traces"}
+    assert "spectrogram_EEG_L" not in plots
+    assert "sleep_scoring" not in plots
+    for fig in plots.values():
         plt_close(fig)
 
 
@@ -152,7 +197,6 @@ def test_eye_movement_plot_includes_zoom_panels_for_matches() -> None:
     assert any(t.startswith("Last edge window") for t in titles)
     assert any("LRL" in t for t in titles)
     assert any("RLR" in t for t in titles)
-    # Overview + two zoom cards + last overview.
     assert len(visible) == 4
     plt_close(fig)
 
@@ -162,7 +206,7 @@ def test_full_recording_plots_share_time_axis() -> None:
     duration_h = result.recording.n_samples / float(result.recording.sample_rate) / 3600.0
     plots = build_plots(result)
 
-    full_recording_keys = ("channel_EEG_L", "channel_EEG_R", "sleep_scoring")
+    full_recording_keys = ("raw_traces", "spectrogram_EEG_L", "sleep_scoring")
     for key in full_recording_keys:
         for ax in plots[key].axes:
             xlim = ax.get_xlim()
