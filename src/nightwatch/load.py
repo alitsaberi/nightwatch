@@ -10,7 +10,7 @@ import numpy as np
 
 from somnio.data.timeseries import TimeSeries
 from somnio.data.units import UV, Dimension, convert_values
-from somnio.io.edf import read_zmax_multi
+from somnio.io.edf import read_standard, read_zmax_multi
 from somnio.tasks.eeg_usability.defaults import SAMPLE_RATE_HZ
 from somnio.transforms.resample import apply_resample
 
@@ -147,6 +147,23 @@ def load_zmax_recording(
     )
 
 
+def load_edf_recording(path: Path | str) -> LoadedRecording:
+    """Load a single multiplexed EDF file via somnio ``read_standard``."""
+    file_path = Path(path)
+    if file_path.is_dir():
+        raise IsADirectoryError(file_path)
+    if not file_path.is_file():
+        raise FileNotFoundError(file_path)
+
+    ts = read_standard(file_path, verbose="ERROR")
+    raw_channel_names = tuple(ts.channel_names)
+    ts = convert_voltage_channels_to_microvolts(ts)
+    return LoadedRecording(
+        timeseries=ts,
+        raw_channel_names=raw_channel_names,
+    )
+
+
 def load_recording(config: AnalysisConfig) -> LoadedRecording:
     """Load a recording and return a somnio TimeSeries."""
     path = config.recording_path
@@ -155,5 +172,7 @@ def load_recording(config: AnalysisConfig) -> LoadedRecording:
 
     if config.format == "zmax":
         return load_zmax_recording(path, movement=config.movement)
+    if config.format == "edf":
+        return load_edf_recording(path)
 
     raise ValueError(f"Unsupported recording format: {config.format!r}")

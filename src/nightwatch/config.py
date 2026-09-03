@@ -15,7 +15,7 @@ class AnalysisConfig(BaseModel):
     """Settings for a single recording analysis run."""
 
     recording_path: Path
-    format: Literal["zmax"] = "zmax"
+    format: Literal["zmax", "edf"] = "zmax"
     model_path: Path
     edge_minutes: float = Field(default=30.0, gt=0)
     usability_model: Literal["lite", "lite_binary"] = Field(default="lite")

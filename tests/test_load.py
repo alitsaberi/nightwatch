@@ -19,6 +19,7 @@ from nightwatch.load import (
     append_channel,
     convert_voltage_channels_to_microvolts,
     derive_movement,
+    load_edf_recording,
     load_recording,
     load_zmax_recording,
     zmax_stems_for,
@@ -180,6 +181,52 @@ def test_load_recording_dispatches_zmax(tmp_path: Path) -> None:
         out = load_recording(config)
 
     load_mock.assert_called_once_with(recording, movement="MOVEMENT")
+    assert out is expected
+
+
+def test_load_edf_recording_converts_to_microvolts(tmp_path: Path) -> None:
+    edf_path = tmp_path / "rec.edf"
+    edf_path.write_bytes(b"edf")
+    base_ts = TimeSeries(
+        values=np.array([[0.001, 0.002]], dtype=np.float64),
+        timestamps=np.array([0], dtype=np.int64),
+        channel_names=("C3", "C4"),
+        units=(V, V),
+        sample_rate=200.0,
+    )
+
+    with patch("nightwatch.load.read_standard", return_value=base_ts) as read_mock:
+        out = load_edf_recording(edf_path)
+
+    read_mock.assert_called_once()
+    assert out.timeseries.units[0] == UV
+    np.testing.assert_allclose(out.timeseries.values[0, 0], 1000.0)
+    assert out.timeseries.sample_rate == 200.0
+    assert out.raw_channel_names == ("C3", "C4")
+
+
+def test_load_edf_recording_rejects_directory(tmp_path: Path) -> None:
+    with pytest.raises(IsADirectoryError):
+        load_edf_recording(tmp_path)
+
+
+def test_load_recording_dispatches_edf(tmp_path: Path) -> None:
+    edf_path = tmp_path / "rec.edf"
+    edf_path.write_bytes(b"edf")
+    config = AnalysisConfig(
+        recording_path=edf_path,
+        format="edf",
+        model_path=tmp_path / "model.onnx",
+    )
+    expected = LoadedRecording(
+        timeseries=_make_ts(channel_names=("C3", "C4")),
+        raw_channel_names=("C3", "C4"),
+    )
+
+    with patch("nightwatch.load.load_edf_recording", return_value=expected) as load_mock:
+        out = load_recording(config)
+
+    load_mock.assert_called_once_with(edf_path)
     assert out is expected
 
 
