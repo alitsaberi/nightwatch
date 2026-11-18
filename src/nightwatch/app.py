@@ -141,7 +141,7 @@ def _pick_directory(*, title: str = "Select recording folder") -> str | None:
     return _pick_path_via_tkinter_subprocess(kind="dir", title=title, initial=initial)
 
 
-def _pick_edf_file(*, title: str = "Select EDF file") -> str | None:
+def _pick_edf_file(*, title: str = "Select EDF/BDF file") -> str | None:
     import sys
 
     st.session_state.pop("recording_path_error", None)
@@ -154,12 +154,16 @@ def _pick_edf_file(*, title: str = "Select EDF file") -> str | None:
             kind="file",
             title=title,
             initial=initial_dir,
-            filetypes=[("EDF", "*.edf"), ("All files", "*.*")],
+            filetypes=[
+                ("EDF", "*.edf"),
+                ("BDF", "*.bdf"),
+                ("All files", "*.*"),
+            ],
         )
     if selected is None:
         return None
-    if not selected.lower().endswith(".edf"):
-        st.session_state["recording_path_error"] = "Please select a .edf file."
+    if not selected.lower().endswith((".edf", ".bdf")):
+        st.session_state["recording_path_error"] = "Please select a .edf or .bdf file."
         return None
     return selected
 
@@ -461,6 +465,7 @@ st.session_state.setdefault("model_path", "")
 format_choice: FormatChoice = st.sidebar.selectbox(
     "Format",
     options=["zmax", "edf"],
+    format_func=lambda value: "edf/bdf" if value == "edf" else value,
 )
 
 if format_choice == "zmax":
@@ -473,11 +478,11 @@ if format_choice == "zmax":
     )
 else:
     recording_path = _path_input_with_browse(
-        label="EDF file path",
+        label="EDF/BDF file path",
         state_key="recording_path",
         browse_label="Browse",
         pick=_pick_edf_file,
-        help_text="Choose an EDF file",
+        help_text="Choose an EDF or BDF file",
     )
     if st.session_state.get("recording_path_error"):
         st.sidebar.error(st.session_state["recording_path_error"])
@@ -492,7 +497,14 @@ if load_clicked:
         load_config = AnalysisConfig(recording_path=path, format=format_choice)
         try:
             loaded = load_recording(load_config)
-        except (FileNotFoundError, NotADirectoryError, IsADirectoryError, ValueError) as exc:
+        except (
+            FileNotFoundError,
+            NotADirectoryError,
+            IsADirectoryError,
+            ValueError,
+            NotImplementedError,
+            OSError,
+        ) as exc:
             st.error(str(exc))
         else:
             st.session_state["loaded_recording"] = loaded

@@ -177,6 +177,31 @@ def test_load_edf_recording_rejects_directory(tmp_path: Path) -> None:
         load_edf_recording(tmp_path)
 
 
+def test_load_bdf_recording_uses_mne_bdf_reader(tmp_path: Path) -> None:
+    bdf_path = tmp_path / "rec.bdf"
+    bdf_path.write_bytes(b"bdf")
+    base_ts = TimeSeries(
+        values=np.array([[0.001, 0.002]], dtype=np.float64),
+        timestamps=np.array([0], dtype=np.int64),
+        channel_names=("C3", "C4"),
+        units=(V, V),
+        sample_rate=200.0,
+    )
+    raw = object()
+
+    with (
+        patch("mne.io.read_raw_bdf", return_value=raw) as bdf_mock,
+        patch("somnio.data.adapters.mne.from_mne_raw", return_value=base_ts) as adapt_mock,
+    ):
+        out = load_edf_recording(bdf_path)
+
+    bdf_mock.assert_called_once()
+    adapt_mock.assert_called_once_with(raw)
+    assert out.timeseries.units[0] == UV
+    np.testing.assert_allclose(out.timeseries.values[0, 0], 1000.0)
+    assert out.raw_channel_names == ("C3", "C4")
+
+
 def test_load_recording_dispatches_zmax(tmp_path: Path) -> None:
     recording = tmp_path / "recording"
     recording.mkdir()

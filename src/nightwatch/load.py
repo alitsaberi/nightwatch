@@ -137,15 +137,26 @@ def load_zmax_recording(
     )
 
 
+def _read_standard_or_bdf(path: Path) -> TimeSeries:
+    """Load one EDF via somnio, or BDF via MNE (somnio's reader is EDF-only)."""
+    if path.suffix.lower() == ".bdf":
+        import mne
+        from somnio.data.adapters.mne import from_mne_raw
+
+        raw = mne.io.read_raw_bdf(path, preload=True, verbose="ERROR")
+        return from_mne_raw(raw)
+    return read_standard(path, verbose="ERROR")
+
+
 def load_edf_recording(path: Path | str) -> LoadedRecording:
-    """Load a single multiplexed EDF file via somnio ``read_standard``."""
+    """Load a single multiplexed EDF or BDF file."""
     file_path = Path(path)
     if file_path.is_dir():
         raise IsADirectoryError(file_path)
     if not file_path.is_file():
         raise FileNotFoundError(file_path)
 
-    ts = read_standard(file_path, verbose="ERROR")
+    ts = _read_standard_or_bdf(file_path)
     raw_channel_names = tuple(ts.channel_names)
     ts = convert_voltage_channels_to_microvolts(ts)
     return LoadedRecording(
