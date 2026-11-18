@@ -12,15 +12,15 @@ from somnio.tasks.eeg_usability import (
 )
 from somnio.tasks.eeg_usability.defaults import SAMPLE_RATE_HZ
 from somnio.tasks.eye_movement_detection import detect_lr_eye_movements
-from somnio.tasks.sleep_scoring import score_sleep_stages
-from somnio.tasks.sleep_scoring.models import OnnxSleepScoringModel
-from somnio.tasks.sleep_scoring.schema import ModelMetadata
-from somnio.transforms.clip import apply_clip_iqr
-from somnio.transforms.filter import apply_fir_filter
 from somnio.transforms.resample import apply_resample
-from somnio.transforms.scale import apply_scale
+from wu_sleep import labels_from_probabilities, score_sleep_stages
 
-from nightwatch.config import AnalysisConfig, apply_zmax_view_defaults
+from nightwatch.config import (
+    WU_SLEEP_CLASS_LABELS,
+    AnalysisConfig,
+    apply_zmax_view_defaults,
+    resolve_wu_sleep_model_path,
+)
 from nightwatch.load import load_recording
 
 SLEEP_EPOCH_NS = 30_000_000_000
@@ -70,98 +70,6 @@ def require_channels(recording: TimeSeries, names: list[str] | tuple[str, ...]) 
             f"Recording is missing channel(s) {missing}. "
             f"Available: {_available_names(recording)}"
         )
-
-
-def _prepare_sleep_scoring_channel(
-    ts: TimeSeries,
-    channel: str,
-    metadata: ModelMetadata,
-) -> TimeSeries:
-    """Select one EEG channel and apply sleep-scoring preprocessing."""
-    if channel not in ts.channel_index_map:
-        raise ValueError(
-            f"Recording is missing sleep-scoring channel: {channel!r}. "
-            f"Available: {_available_names(ts)}"
-        )
-    if ts.sample_rate is None:
-        raise ValueError("Recording has no sample_rate metadata; cannot score sleep stages.")
-    if metadata.n_channels != 1:
-        raise ValueError(
-            f"Soft-fused sleep scoring requires a 1-channel model; "
-            f"got n_channels={metadata.n_channels}."
-        )
-
-    selected = ts.select_channels([channel])
-    target_hz = float(metadata.sample_rate_hz)
-    selected = apply_resample(selected, target_hz)
-    selected = apply_fir_filter(selected, low_cutoff=0.3, high_cutoff=35.0)
-    selected = apply_scale(selected, method="robust")
-    return apply_clip_iqr(selected, iqr_factor=20.0)
-
-
-def soft_fuse_hypnodensities(hypnodensities: list[TimeSeries]) -> TimeSeries:
-    """Average per-channel hypnodensity probabilities (soft fusion)."""
-    if not hypnodensities:
-        raise ValueError("At least one hypnodensity is required for soft fusion.")
-    if len(hypnodensities) == 1:
-        return hypnodensities[0]
-
-    ref = hypnodensities[0]
-    for other in hypnodensities[1:]:
-        if list(other.channel_names) != list(ref.channel_names):
-            raise ValueError("Hypnodensity class labels must match for soft fusion.")
-        if other.values.shape != ref.values.shape:
-            raise ValueError(
-                "Hypnodensity shapes must match for soft fusion: "
-                f"{ref.values.shape} vs {other.values.shape}."
-            )
-
-    stacked = np.stack([hd.values for hd in hypnodensities], axis=0)
-    fused = np.mean(stacked, axis=0)
-    row_sums = fused.sum(axis=1, keepdims=True)
-    row_sums = np.where(row_sums > 0.0, row_sums, 1.0)
-    fused = fused / row_sums
-
-    return TimeSeries(
-        values=np.asarray(fused, dtype=np.float64),
-        timestamps=ref.timestamps.copy(),
-        channel_names=list(ref.channel_names),
-        units=list(ref.units),
-        sample_rate=ref.sample_rate,
-    )
-
-
-def hypnogram_from_hypnodensity(
-    hypnodensity: TimeSeries,
-    *,
-    onset_ns: int,
-    epoch_ns: int = SLEEP_EPOCH_NS,
-) -> Epochs:
-    """Aggregate hypnodensity into fixed-length epochs via mean-then-argmax."""
-    times = np.asarray(hypnodensity.timestamps, dtype=np.int64)
-    probs = np.asarray(hypnodensity.values, dtype=np.float64)
-    stage_names = [str(name) for name in hypnodensity.channel_names]
-
-    if times.size == 0 or probs.size == 0:
-        return Epochs(labels=np.array([], dtype=object), period_length=epoch_ns, onset=onset_ns)
-
-    n_epochs = max(1, int((int(times[-1]) - onset_ns) // epoch_ns) + 1)
-    labels: list[str] = []
-    for index in range(n_epochs):
-        start = onset_ns + index * epoch_ns
-        stop = start + epoch_ns
-        mask = (times >= start) & (times < stop)
-        if not np.any(mask):
-            labels.append(UNUSABLE_LABEL)
-            continue
-        mean_prob = probs[mask].mean(axis=0)
-        labels.append(stage_names[int(np.argmax(mean_prob))])
-
-    return Epochs(
-        labels=np.asarray(labels, dtype=object),
-        period_length=epoch_ns,
-        onset=onset_ns,
-    )
 
 
 def mark_unusable_hypnogram_epochs(
@@ -246,34 +154,51 @@ def _run_sleep_scoring(
     recording: TimeSeries,
     config: AnalysisConfig,
 ) -> tuple[TimeSeries, Epochs, tuple[str, ...]] | None:
-    """Score sleep stages when sleep channels are configured; else ``None``."""
+    """Score sleep stages with wu-sleep when sleep channels are configured."""
     channels = list(config.sleep_channels)
     if not channels:
         return None
 
-    if config.model_path is None:
-        raise ValueError("Sleep scoring requires --model / model_path when sleep_channels is set.")
-    if not config.model_path.is_file():
-        raise FileNotFoundError(config.model_path)
-
+    model_dir = resolve_wu_sleep_model_path(config.model_path, config.sleep_model)
     require_channels(recording, channels)
-    sleep_model = OnnxSleepScoringModel.load(config.model_path)
-    per_channel: list[TimeSeries] = []
-    for channel in channels:
-        sleep_ts = _prepare_sleep_scoring_channel(recording, channel, sleep_model.metadata)
-        hypnodensity = score_sleep_stages(
-            sleep_ts,
-            backend=sleep_model,
-            metadata=sleep_model.metadata,
-            output="probs_timeseries",
-        )
-        assert isinstance(hypnodensity, TimeSeries)
-        per_channel.append(hypnodensity)
+    if recording.sample_rate is None:
+        raise ValueError("Recording has no sample_rate metadata; cannot score sleep stages.")
+    if recording.n_samples == 0:
+        raise ValueError("Recording has no samples; cannot score sleep stages.")
 
-    fused = soft_fuse_hypnodensities(per_channel)
-    onset_ns = int(recording.timestamps[0]) if recording.n_samples else 0
-    hypnogram = hypnogram_from_hypnodensity(fused, onset_ns=onset_ns)
-    return fused, hypnogram, tuple(channels)
+    selected = recording.select_channels(channels)
+    class_labels = list(WU_SLEEP_CLASS_LABELS)
+    probs = score_sleep_stages(
+        np.asarray(selected.values),
+        sample_rate_hz=float(recording.sample_rate),
+        model_path=model_dir,
+        channel_names=list(channels),
+        output="probs",
+    )
+    probs = np.asarray(probs, dtype=np.float64)
+    if probs.ndim != 2 or probs.shape[1] != len(class_labels):
+        raise ValueError(
+            f"wu-sleep returned unexpected probability shape {probs.shape}; "
+            f"expected (n_epochs, {len(class_labels)})."
+        )
+
+    labels = labels_from_probabilities(probs, class_labels)
+    onset_ns = int(recording.timestamps[0])
+    n_epochs = int(probs.shape[0])
+    timestamps = onset_ns + np.arange(n_epochs, dtype=np.int64) * SLEEP_EPOCH_NS + SLEEP_EPOCH_NS // 2
+    hypnodensity = TimeSeries(
+        values=probs,
+        timestamps=timestamps,
+        channel_names=class_labels,
+        units=["1"] * len(class_labels),
+        sample_rate=1.0 / 30.0,
+    )
+    hypnogram = Epochs(
+        labels=np.asarray(labels, dtype=object),
+        period_length=SLEEP_EPOCH_NS,
+        onset=onset_ns,
+    )
+    return hypnodensity, hypnogram, tuple(channels)
 
 
 def _run_artifact_detection(
@@ -354,15 +279,16 @@ def _run_eye_movements(
 def run_analysis(config: AnalysisConfig) -> AnalysisResult:
     """Run enabled views: sleep scoring, usability, and edge eye-movement detection.
 
-    Empty channel sets skip that view. Sleep scoring requires ``model_path`` when
-    ``sleep_channels`` is non-empty. ZMax empty-view configs are filled with
-    EEG_L / EEG_R / MOVEMENT defaults after load when those channels exist.
+    Empty channel sets skip that view. Sleep scoring uses wu-sleep and resolves
+    ``sleep_model`` under ``model_path`` (or a discoverable wu-sleep ``model/``
+    tree) when ``sleep_channels`` is non-empty. ZMax empty-view configs are filled
+    with EEG_L / EEG_R / MOVEMENT defaults after load when those channels exist.
 
     Args:
         config: Analysis settings.
 
     Raises:
-        FileNotFoundError: If the sleep-scoring model path does not exist.
+        FileNotFoundError: If the wu-sleep model directory does not exist.
         ValueError: If required channels are missing or inputs are invalid.
     """
     loaded = load_recording(config)

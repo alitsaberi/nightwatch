@@ -1,6 +1,6 @@
 # Nightwatch
 
-Sleep recording quality control and review tool powered by [somnio](https://github.com/alitsaberi/somnio).
+Sleep recording quality control and review tool powered by [somnio](https://github.com/alitsaberi/somnio) and [wu-sleep](https://github.com/alitsaberi/wu-sleep).
 
 Nightwatch loads a recording, optionally runs sleep scoring, EEG usability analysis, and edge-window eye movement detection, then surfaces metrics and plots via a CLI HTML report and a Streamlit UI.
 
@@ -14,7 +14,7 @@ Views are independent: raw traces, spectrogram, sleep scoring, artifacts, and ey
 pip install .
 ```
 
-Sleep-scoring ONNX weights and sidecar `model.yaml` are **not** bundled. Provide your model path at runtime when sleep scoring is enabled (CLI `--model` or Streamlit sidebar).
+Sleep scoring uses [WU-Sleep](https://github.com/alitsaberi/wu-sleep). Model weights live in the wu-sleep repo under `model/` (`ft-am`, `ft-noam`, `tfs-am`, `dt`) and are not bundled in the Python wheel. Point Nightwatch at that tree with `--model`, or use an editable wu-sleep install so the local `model/` directory can be discovered automatically.
 
 ## CLI
 
@@ -29,7 +29,8 @@ ZMax full default suite (no channel flags):
 ```bash
 nightwatch run /path/to/zmax_recording \
   --format zmax \
-  --model /path/to/model.onnx \
+  --model /path/to/wu-sleep/model \
+  --sleep-model ft-am \
   --output ./report.html
 ```
 
@@ -41,13 +42,16 @@ nightwatch run /path/to/recording.edf \
   --raw-channels C3,C4 \
   --spectrogram-channels C3 \
   --sleep-channels C3 \
-  --model /path/to/model.onnx \
+  --model /path/to/wu-sleep/model \
+  --sleep-model ft-am \
   --artifact-eeg C3 \
   --movement ACC \
   --eye-left C3 \
   --eye-right C4 \
   --output ./report.html
 ```
+
+`--model` accepts either a strategy SavedModel directory (e.g. `.../model/ft-am`) or the parent `model/` root. With a parent root, `--sleep-model` selects among `ft-am`, `ft-noam`, `tfs-am`, and `dt`.
 
 EDF with no view flags writes a recording-info-only report.
 
@@ -70,7 +74,8 @@ streamlit run nightwatch.app
 1. Choose format and path (folder for ZMax, `.edf` file for EDF), then **Load recording**.
 2. Recording metadata appears immediately.
 3. Enable views independently (raw, spectrogram, sleep, artifacts, eye movements).
-4. **Run analysis**.
+4. For sleep scoring, pick a WU-Sleep strategy and optionally a model directory.
+5. **Run analysis**.
 
 ## Development
 

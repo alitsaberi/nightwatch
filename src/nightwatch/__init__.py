@@ -1,4 +1,4 @@
-"""Nightwatch: sleep recording QC and review on top of somnio."""
+"""Nightwatch: sleep recording QC and review on top of somnio and wu-sleep."""
 
 from __future__ import annotations
 

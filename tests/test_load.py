@@ -207,7 +207,7 @@ def test_load_recording_dispatches_zmax(tmp_path: Path) -> None:
     recording.mkdir()
     config = AnalysisConfig(
         recording_path=recording,
-        model_path=tmp_path / "model.onnx",
+        model_path=tmp_path / "model",
     )
     expected = LoadedRecording(
         timeseries=_make_ts(channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z", "MOVEMENT")),
@@ -240,7 +240,7 @@ def test_load_recording_dispatches_edf(tmp_path: Path) -> None:
 def test_load_recording_missing_path_raises(tmp_path: Path) -> None:
     config = AnalysisConfig(
         recording_path=tmp_path / "missing",
-        model_path=tmp_path / "model.onnx",
+        model_path=tmp_path / "model",
     )
     with pytest.raises(FileNotFoundError):
         load_recording(config)

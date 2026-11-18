@@ -8,10 +8,11 @@ from typing import Literal
 import typer
 
 from nightwatch import __version__
+from nightwatch.config import DEFAULT_WU_SLEEP_MODEL, WU_SLEEP_MODELS, WuSleepModel
 
 app = typer.Typer(
     name="nightwatch",
-    help="Sleep recording QC and review powered by somnio.",
+    help="Sleep recording QC and review powered by somnio and wu-sleep.",
     no_args_is_help=True,
 )
 
@@ -77,7 +78,17 @@ def inspect_recording(
 def run(
     recording: Path = typer.Argument(..., help="Path to the recording (ZMax directory or EDF file)."),
     format: Literal["zmax", "edf"] = typer.Option("zmax", help="Input recording format."),
-    model: Path | None = typer.Option(None, help="Path to sleep-scoring ONNX model."),
+    model: Path | None = typer.Option(
+        None,
+        help=(
+            "WU-Sleep model directory: a strategy SavedModel dir, or a parent "
+            "model/ root containing ft-am/, ft-noam/, tfs-am/, dt/."
+        ),
+    ),
+    sleep_model: WuSleepModel = typer.Option(
+        DEFAULT_WU_SLEEP_MODEL,
+        help=f"WU-Sleep strategy when --model is a parent model/ root. One of: {', '.join(WU_SLEEP_MODELS)}.",
+    ),
     edge_minutes: float = typer.Option(30.0, help="Minutes at start/end for eye-movement detection."),
     usability_model: Literal["lite", "lite_binary"] = typer.Option(
         "lite",
@@ -125,13 +136,14 @@ def run(
 
     if not recording.exists():
         _fail(f"Recording path does not exist: {recording}")
-    if model is not None and not model.is_file():
-        _fail(f"Sleep-scoring model not found: {model}")
+    if model is not None and not model.exists():
+        _fail(f"Sleep-scoring model path not found: {model}")
 
     config = AnalysisConfig(
         recording_path=recording,
         format=format,
         model_path=model,
+        sleep_model=sleep_model,
         edge_minutes=edge_minutes,
         usability_model=usability_model,
         eye_movement_pattern=eye_movement_pattern,

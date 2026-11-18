@@ -34,14 +34,14 @@ def _make_result() -> AnalysisResult:
         sample_rate=256.0,
     )
     hypnogram = Epochs(
-        labels=np.array(["W", "N2", "R"], dtype=object),
+        labels=np.array(["W", "N2", "REM"], dtype=object),
         period_length=30_000_000_000,
         onset=int(timestamps[0]),
     )
     hypnodensity = TimeSeries(
         values=np.ones((3, 5)) / 5.0,
         timestamps=timestamps[:3],
-        channel_names=("W", "N1", "N2", "N3", "R"),
+        channel_names=("W", "N1", "N2", "N3", "REM"),
         units=("1",) * 5,
         sample_rate=1.0 / 30.0,
     )
@@ -60,7 +60,8 @@ def _make_result() -> AnalysisResult:
     )
     config = AnalysisConfig(
         recording_path=Path("/tmp/recording"),
-        model_path=Path("/tmp/model.onnx"),
+        model_path=Path("/tmp/wu-sleep/model"),
+        sleep_model="ft-am",
         raw_channels=["EEG_L", "EEG_R"],
         spectrogram_channels=["EEG_L"],
         sleep_channels=["EEG_L", "EEG_R"],

@@ -4,28 +4,25 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 
 from somnio.data import Epochs, Event, TimeSeries
 
-from nightwatch.config import AnalysisConfig, apply_zmax_view_defaults
+from nightwatch.config import AnalysisConfig, apply_zmax_view_defaults, resolve_wu_sleep_model_path
 from nightwatch.load import LoadedRecording
 from nightwatch.pipeline import (
     UNUSABLE_LABEL,
     AnalysisResult,
     EdgeEyeMovementResult,
     _detect_edge_eye_movements,
-    _prepare_sleep_scoring_channel,
     edge_window_sample_count,
-    hypnogram_from_hypnodensity,
     mark_unusable_hypnogram_epochs,
     require_channels,
     run_analysis,
     slice_edge_windows,
-    soft_fuse_hypnodensities,
 )
 
 
@@ -146,86 +143,23 @@ def test_apply_zmax_view_defaults_skips_edf() -> None:
     assert filled.sleep_channels == []
 
 
-def test_prepare_sleep_scoring_channel_requires_one_channel_model() -> None:
-    recording = _make_recording(sample_rate=512.0)
-    metadata = MagicMock()
-    metadata.n_channels = 2
-    metadata.sample_rate_hz = 256.0
+def test_resolve_wu_sleep_model_path_from_parent_root(tmp_path: Path) -> None:
+    root = tmp_path / "model"
+    strategy = root / "ft-am"
+    strategy.mkdir(parents=True)
+    (strategy / "model.yaml").write_text("name: ft-am\n")
 
-    with pytest.raises(ValueError, match="1-channel model"):
-        _prepare_sleep_scoring_channel(recording, "EEG_L", metadata)
-
-
-def test_prepare_sleep_scoring_channel_applies_preprocessing() -> None:
-    recording = _make_recording(sample_rate=512.0)
-    metadata = MagicMock()
-    metadata.n_channels = 1
-    metadata.sample_rate_hz = 256.0
-
-    with (
-        patch("nightwatch.pipeline.apply_resample", side_effect=lambda ts, hz: ts) as resample_mock,
-        patch("nightwatch.pipeline.apply_fir_filter", side_effect=lambda ts, **_: ts) as filter_mock,
-        patch("nightwatch.pipeline.apply_scale", side_effect=lambda ts, **_: ts) as scale_mock,
-        patch("nightwatch.pipeline.apply_clip_iqr", side_effect=lambda ts, **_: ts) as clip_mock,
-    ):
-        result = _prepare_sleep_scoring_channel(recording, "EEG_L", metadata)
-
-    assert list(result.channel_names) == ["EEG_L"]
-    resample_mock.assert_called_once()
-    assert resample_mock.call_args.args[1] == 256.0
-    filter_mock.assert_called_once_with(
-        resample_mock.call_args.args[0],
-        low_cutoff=0.3,
-        high_cutoff=35.0,
-    )
-    scale_mock.assert_called_once_with(filter_mock.call_args.args[0], method="robust")
-    clip_mock.assert_called_once_with(scale_mock.call_args.args[0], iqr_factor=20.0)
+    resolved = resolve_wu_sleep_model_path(root, "ft-am")
+    assert resolved == strategy.resolve()
 
 
-def test_soft_fuse_hypnodensities_averages_probabilities() -> None:
-    timestamps = np.arange(3, dtype=np.int64)
-    left = TimeSeries(
-        values=np.array([[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]], dtype=np.float64),
-        timestamps=timestamps,
-        channel_names=("W", "N2"),
-        units=("1", "1"),
-        sample_rate=1.0 / 30.0,
-    )
-    right = TimeSeries(
-        values=np.array([[0.0, 1.0], [1.0, 0.0], [0.5, 0.5]], dtype=np.float64),
-        timestamps=timestamps,
-        channel_names=("W", "N2"),
-        units=("1", "1"),
-        sample_rate=1.0 / 30.0,
-    )
-    fused = soft_fuse_hypnodensities([left, right])
-    np.testing.assert_allclose(fused.values, [[0.5, 0.5], [0.5, 0.5], [0.5, 0.5]])
+def test_resolve_wu_sleep_model_path_from_strategy_dir(tmp_path: Path) -> None:
+    strategy = tmp_path / "ft-am"
+    strategy.mkdir()
+    (strategy / "saved_model.pb").write_bytes(b"pb")
 
-
-def test_hypnogram_from_hypnodensity_aggregates_to_30s() -> None:
-    onset = 1_000_000_000_000
-    timestamps = np.array(
-        [onset, onset + 10_000_000_000, onset + 40_000_000_000],
-        dtype=np.int64,
-    )
-    values = np.array(
-        [
-            [0.1, 0.9],
-            [0.2, 0.8],
-            [0.7, 0.3],
-        ],
-        dtype=np.float64,
-    )
-    hd = TimeSeries(
-        values=values,
-        timestamps=timestamps,
-        channel_names=("W", "N2"),
-        units=("1", "1"),
-        sample_rate=1.0 / 30.0,
-    )
-    hypnogram = hypnogram_from_hypnodensity(hd, onset_ns=onset)
-    assert list(hypnogram.labels) == ["N2", "W"]
-    assert hypnogram.period_length == 30_000_000_000
+    resolved = resolve_wu_sleep_model_path(strategy, "ft-noam")
+    assert resolved == strategy.resolve()
 
 
 def test_mark_unusable_hypnogram_epochs_requires_two_good_windows() -> None:
@@ -266,35 +200,41 @@ def test_mark_unusable_hypnogram_epochs_requires_two_good_windows() -> None:
     assert list(masked.labels) == ["N2", UNUSABLE_LABEL]
 
 
-def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
-    model_path = tmp_path / "model.onnx"
-    model_path.write_bytes(b"onnx")
+def test_run_analysis_wires_wu_sleep(tmp_path: Path) -> None:
+    model_root = tmp_path / "model"
+    strategy = model_root / "ft-am"
+    strategy.mkdir(parents=True)
+    (strategy / "model.yaml").write_text("name: ft-am\n")
     recording_path = tmp_path / "recording"
     recording_path.mkdir()
 
     config = AnalysisConfig(
         recording_path=recording_path,
-        model_path=model_path,
+        model_path=model_root,
+        sleep_model="ft-am",
         format="zmax",
     )
     recording = _make_recording()
-    hypnodensity_left = TimeSeries(
-        values=np.array([[0.8, 0.2], [0.1, 0.9]], dtype=np.float64),
-        timestamps=recording.timestamps[:2],
-        channel_names=("W", "N2"),
-        units=("1", "1"),
-        sample_rate=1.0 / 30.0,
+    onset_ns = int(recording.timestamps[0])
+    probs = np.array(
+        [
+            [0.5, 0.1, 0.2, 0.1, 0.1],
+            [0.1, 0.1, 0.6, 0.1, 0.1],
+        ],
+        dtype=np.float64,
     )
-    hypnodensity_right = TimeSeries(
-        values=np.array([[0.2, 0.8], [0.9, 0.1]], dtype=np.float64),
-        timestamps=recording.timestamps[:2],
-        channel_names=("W", "N2"),
-        units=("1", "1"),
-        sample_rate=1.0 / 30.0,
-    )
+    # Two fully usable 10 s windows in each 30 s sleep epoch.
     usability = TimeSeries(
-        values=np.zeros((5, 1), dtype=np.int64),
-        timestamps=recording.timestamps[::512][:5],
+        values=np.zeros((4, 1), dtype=np.int64),
+        timestamps=np.array(
+            [
+                onset_ns + 5_000_000_000,
+                onset_ns + 15_000_000_000,
+                onset_ns + 35_000_000_000,
+                onset_ns + 45_000_000_000,
+            ],
+            dtype=np.int64,
+        ),
         channel_names=("EEG_L",),
         units=("1",),
         sample_rate=0.1,
@@ -305,10 +245,6 @@ def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
         primitives=[],
     )
 
-    mock_sleep_model = MagicMock()
-    mock_sleep_model.metadata.n_channels = 1
-    mock_sleep_model.metadata.sample_rate_hz = 256.0
-
     loaded = LoadedRecording(
         timeseries=recording,
         raw_channel_names=("EEG_L", "EEG_R", "ACC_X", "ACC_Y", "ACC_Z"),
@@ -317,13 +253,13 @@ def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
     with (
         patch("nightwatch.pipeline.load_recording", return_value=loaded) as load_mock,
         patch(
-            "nightwatch.pipeline.OnnxSleepScoringModel.load",
-            return_value=mock_sleep_model,
-        ) as sleep_load_mock,
-        patch(
             "nightwatch.pipeline.score_sleep_stages",
-            side_effect=[hypnodensity_left, hypnodensity_right],
+            return_value=probs,
         ) as score_mock,
+        patch(
+            "nightwatch.pipeline.labels_from_probabilities",
+            return_value=np.array(["W", "N2"], dtype=object),
+        ) as labels_mock,
         patch("nightwatch.pipeline.load_usability_model", return_value=object()),
         patch(
             "nightwatch.pipeline.get_usability_score",
@@ -333,16 +269,14 @@ def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
             "nightwatch.pipeline._detect_edge_eye_movements",
             side_effect=[edge_result, edge_result],
         ) as edge_mock,
-        patch(
-            "nightwatch.pipeline._prepare_sleep_scoring_channel",
-            side_effect=lambda ts, channel, metadata: ts.select_channels([channel]),
-        ),
     ):
         result = run_analysis(config)
 
     load_mock.assert_called_once()
-    sleep_load_mock.assert_called_once_with(model_path)
-    assert score_mock.call_count == 2
+    score_mock.assert_called_once()
+    assert score_mock.call_args.kwargs["model_path"] == strategy.resolve()
+    assert score_mock.call_args.kwargs["channel_names"] == ["EEG_L", "EEG_R"]
+    labels_mock.assert_called_once()
     assert usability_mock.call_count == 2
     assert edge_mock.call_count == 2
 
@@ -350,7 +284,8 @@ def test_run_analysis_wires_somnio_tasks(tmp_path: Path) -> None:
     assert result.recording is recording
     assert result.raw_channel_names == loaded.raw_channel_names
     assert result.sleep_channels == ("EEG_L", "EEG_R")
-    np.testing.assert_allclose(result.hypnodensity.values, [[0.5, 0.5], [0.5, 0.5]])
+    np.testing.assert_allclose(result.hypnodensity.values, probs)
+    assert list(result.hypnogram.labels) == ["W", "N2"]
     assert result.usability_scores is not None
     assert list(result.usability_scores.channel_names) == ["EEG_L", "EEG_R"]
     assert result.edge_start is edge_result
@@ -375,7 +310,7 @@ def test_run_analysis_skips_all_views_for_empty_edf_config(tmp_path: Path) -> No
     assert result.sleep_channels == ()
 
 
-def test_run_analysis_sleep_requires_model(tmp_path: Path) -> None:
+def test_run_analysis_sleep_requires_resolvable_model(tmp_path: Path) -> None:
     edf_path = tmp_path / "rec.edf"
     edf_path.write_bytes(b"edf")
     recording = _make_recording(channel_names=("C3", "C4"))
@@ -387,7 +322,10 @@ def test_run_analysis_sleep_requires_model(tmp_path: Path) -> None:
         model_path=None,
     )
 
-    with patch("nightwatch.pipeline.load_recording", return_value=loaded):
+    with (
+        patch("nightwatch.pipeline.load_recording", return_value=loaded),
+        patch("nightwatch.config.discover_wu_sleep_model_root", return_value=None),
+    ):
         with pytest.raises(ValueError, match="model_path"):
             run_analysis(config)
 
@@ -402,7 +340,7 @@ def test_run_analysis_missing_model_raises(tmp_path: Path) -> None:
     )
     config = AnalysisConfig(
         recording_path=recording_path,
-        model_path=tmp_path / "missing.onnx",
+        model_path=tmp_path / "missing-model",
         format="zmax",
         sleep_channels=["EEG_L"],
         raw_channels=[],

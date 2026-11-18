@@ -51,7 +51,8 @@ def _make_result() -> AnalysisResult:
     )
     config = AnalysisConfig(
         recording_path="/tmp/recording",
-        model_path="/tmp/model.onnx",
+        model_path="/tmp/wu-sleep/model",
+        sleep_model="ft-am",
         raw_channels=["EEG_L", "EEG_R"],
         spectrogram_channels=["EEG_L", "EEG_R"],
         sleep_channels=["EEG_L", "EEG_R"],
@@ -63,7 +64,7 @@ def _make_result() -> AnalysisResult:
     hypnodensity = TimeSeries(
         values=np.ones((5, 5)) / 5.0,
         timestamps=recording.timestamps[:5],
-        channel_names=("W", "N1", "N2", "N3", "R"),
+        channel_names=("W", "N1", "N2", "N3", "REM"),
         units=("1",) * 5,
         sample_rate=1.0 / 30.0,
     )
@@ -184,7 +185,8 @@ def test_compute_metrics_binary_usability_labels() -> None:
     result = _make_result()
     result.config = AnalysisConfig(
         recording_path="/tmp/recording",
-        model_path="/tmp/model.onnx",
+        model_path="/tmp/wu-sleep/model",
+        sleep_model="ft-am",
         usability_model="lite_binary",
         artifact_eeg_channels=["EEG_L", "EEG_R"],
         movement_channel="MOVEMENT",

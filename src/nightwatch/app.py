@@ -20,10 +20,13 @@ import streamlit as st
 from nightwatch import __version__
 from nightwatch.config import (
     DEFAULT_EYE_MOVEMENT_PATTERN,
+    DEFAULT_WU_SLEEP_MODEL,
+    WU_SLEEP_MODELS,
     ZMAX_DEFAULT_EEG_LEFT,
     ZMAX_DEFAULT_EEG_RIGHT,
     ZMAX_DEFAULT_MOVEMENT,
     AnalysisConfig,
+    WuSleepModel,
     apply_zmax_view_defaults,
 )
 from nightwatch.load import LoadedRecording, load_recording
@@ -168,25 +171,14 @@ def _pick_edf_file(*, title: str = "Select EDF/BDF file") -> str | None:
     return selected
 
 
-def _pick_onnx_file(*, title: str = "Select sleep-scoring model") -> str | None:
-    import sys
-
+def _pick_model_directory(*, title: str = "Select WU-Sleep model directory") -> str | None:
     st.session_state.pop("model_path_error", None)
-    if sys.platform == "darwin":
-        selected = _pick_file_macos(title=title)
-    else:
-        current = st.session_state.get("model_path") or ""
-        initial_dir = str(Path(current).expanduser().parent) if current else None
-        selected = _pick_path_via_tkinter_subprocess(
-            kind="file",
-            title=title,
-            initial=initial_dir,
-            filetypes=[("ONNX model", "*.onnx"), ("All files", "*.*")],
-        )
+    selected = _pick_directory(title=title)
     if selected is None:
         return None
-    if not selected.lower().endswith(".onnx"):
-        st.session_state["model_path_error"] = "Please select a .onnx model file."
+    path = Path(selected)
+    if not path.is_dir():
+        st.session_state["model_path_error"] = "Please select a WU-Sleep model directory."
         return None
     return selected
 
@@ -456,7 +448,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.title("Nightwatch")
-st.caption(f"v{__version__} — sleep recording QC powered by somnio")
+st.caption(f"v{__version__} — sleep recording QC powered by somnio and wu-sleep")
 
 st.sidebar.header("Recording")
 st.session_state.setdefault("recording_path", "")
@@ -538,16 +530,27 @@ if loaded is not None:
         key="sleep_channels",
     )
     if sleep_channels:
+        st.session_state.setdefault("sleep_model", DEFAULT_WU_SLEEP_MODEL)
+        sleep_model: WuSleepModel = st.sidebar.selectbox(
+            "WU-Sleep model",
+            options=list(WU_SLEEP_MODELS),
+            key="sleep_model",
+            help="ft-am is the recommended checkpoint; others are manuscript strategy variants.",
+        )
         model_path = _path_input_with_browse(
-            label="Sleep model path (.onnx)",
+            label="WU-Sleep model path",
             state_key="model_path",
             browse_label="Browse",
-            pick=_pick_onnx_file,
-            help_text="Choose an ONNX sleep-scoring model",
+            pick=_pick_model_directory,
+            help_text=(
+                "SavedModel directory, or parent model/ folder containing "
+                "ft-am/, ft-noam/, tfs-am/, dt/. Optional when wu-sleep is editable."
+            ),
         )
         if st.session_state.get("model_path_error"):
             st.sidebar.error(st.session_state["model_path_error"])
     else:
+        sleep_model = st.session_state.get("sleep_model", DEFAULT_WU_SLEEP_MODEL)
         model_path = st.session_state.get("model_path", "")
 
     artifact_eeg_channels = st.sidebar.multiselect(
@@ -587,15 +590,14 @@ if loaded is not None:
     run_clicked = st.sidebar.button("Run analysis", type="primary")
 
     if run_clicked:
-        if sleep_channels and not str(model_path).strip():
-            st.error("Enter a sleep-scoring model path when sleep channels are selected.")
-        elif not eye_movement_pattern.strip():
+        if not eye_movement_pattern.strip():
             st.error("Enter an eye-movement sequence pattern.")
         else:
             config = AnalysisConfig(
                 recording_path=Path(st.session_state["loaded_path"]),
                 format=st.session_state["loaded_format"],
-                model_path=Path(str(model_path).strip()) if sleep_channels else None,
+                model_path=Path(str(model_path).strip()) if str(model_path).strip() else None,
+                sleep_model=sleep_model,  # type: ignore[arg-type]
                 edge_minutes=float(edge_minutes),
                 usability_model=usability_model,  # type: ignore[arg-type]
                 eye_movement_pattern=eye_movement_pattern.strip(),

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, Field
 
@@ -14,17 +14,84 @@ ZMAX_DEFAULT_EEG_LEFT = "EEG_L"
 ZMAX_DEFAULT_EEG_RIGHT = "EEG_R"
 ZMAX_DEFAULT_MOVEMENT = "MOVEMENT"
 
+WU_SLEEP_MODELS = ("ft-am", "ft-noam", "tfs-am", "dt")
+WuSleepModel = Literal["ft-am", "ft-noam", "tfs-am", "dt"]
+DEFAULT_WU_SLEEP_MODEL: WuSleepModel = "ft-am"
+WU_SLEEP_CLASS_LABELS = ("W", "N1", "N2", "N3", "REM")
+
+
+def discover_wu_sleep_model_root() -> Path | None:
+    """Return a wu-sleep ``model/`` directory when discoverable from the install."""
+    try:
+        import wu_sleep
+    except ImportError:
+        return None
+
+    package_dir = Path(wu_sleep.__file__).resolve().parent
+    for candidate in (package_dir.parent.parent / "model", package_dir.parent / "model"):
+        if (candidate / DEFAULT_WU_SLEEP_MODEL).is_dir():
+            return candidate
+    return None
+
+
+def resolve_wu_sleep_model_path(
+    model_path: Path | None,
+    sleep_model: WuSleepModel | str = DEFAULT_WU_SLEEP_MODEL,
+) -> Path:
+    """Resolve a WU-Sleep SavedModel directory from a root or direct path.
+
+    ``model_path`` may be:
+
+    - a strategy directory (contains ``model.yaml`` / ``saved_model.pb``), or
+    - a parent ``model/`` directory containing ``ft-am`` / ``ft-noam`` / …
+    - omitted, in which case a discoverable wu-sleep ``model/`` root is used
+    """
+    strategy = str(sleep_model)
+    if strategy not in get_args(WuSleepModel):
+        allowed = ", ".join(get_args(WuSleepModel))
+        raise ValueError(f"sleep_model must be one of {allowed}, got {sleep_model!r}")
+
+    root = model_path
+    if root is None:
+        root = discover_wu_sleep_model_root()
+    if root is None:
+        raise ValueError(
+            "Sleep scoring requires --model / model_path pointing to a wu-sleep "
+            f"model directory (or parent of {strategy}/), or an editable wu-sleep "
+            "install with a local model/ tree."
+        )
+
+    root = root.expanduser().resolve()
+    strategy_dir = root / strategy
+    if strategy_dir.is_dir():
+        return strategy_dir
+
+    if root.is_dir() and (
+        (root / "model.yaml").is_file()
+        or (root / "saved_model.pb").is_file()
+        or (root / "variables").is_dir()
+    ):
+        return root
+
+    raise FileNotFoundError(
+        f"WU-Sleep model not found at {root} or {strategy_dir}. "
+        f"Pass a SavedModel directory or a parent containing {strategy}/."
+    )
+
 
 class AnalysisConfig(BaseModel):
     """Settings for a single recording analysis run.
 
     Each view is independent. Empty channel lists / ``None`` skip that view.
-    ``model_path`` is required only when ``sleep_channels`` is non-empty.
+    Sleep scoring uses [wu-sleep](https://github.com/alitsaberi/wu-sleep); provide
+    ``model_path`` (SavedModel dir or parent ``model/`` root) unless an editable
+    wu-sleep install exposes its ``model/`` tree.
     """
 
     recording_path: Path
     format: Literal["zmax", "edf"] = "zmax"
     model_path: Path | None = None
+    sleep_model: WuSleepModel = DEFAULT_WU_SLEEP_MODEL
     edge_minutes: float = Field(default=30.0, gt=0)
     usability_model: Literal["lite", "lite_binary"] = Field(default="lite")
     eye_movement_pattern: str = Field(
