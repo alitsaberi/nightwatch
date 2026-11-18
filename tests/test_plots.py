@@ -42,12 +42,12 @@ def _make_result(*, include_all: bool = True) -> AnalysisResult:
     hypnodensity = TimeSeries(
         values=rng.random((20, 5)),
         timestamps=timestamps[:20],
-        channel_names=("W", "N1", "N2", "N3", "R"),
+        channel_names=("W", "N1", "N2", "N3", "REM"),
         units=("1",) * 5,
         sample_rate=1.0 / 30.0,
     )
     hypnogram = Epochs(
-        labels=np.array(["W", "N2", "N2", "R"], dtype=object),
+        labels=np.array(["W", "N2", "N2", "REM"], dtype=object),
         period_length=30_000_000_000,
         onset=int(timestamps[0]),
     )
@@ -66,7 +66,8 @@ def _make_result(*, include_all: bool = True) -> AnalysisResult:
     if include_all:
         config = AnalysisConfig(
             recording_path="/tmp/recording",
-            model_path="/tmp/model.onnx",
+            model_path="/tmp/wu-sleep/model",
+            sleep_model="ft-am",
             raw_channels=["EEG_L", "EEG_R"],
             spectrogram_channels=["EEG_L", "EEG_R"],
             sleep_channels=["EEG_L", "EEG_R"],
@@ -122,6 +123,10 @@ def test_plot_hypnogram_returns_figure() -> None:
     fig = plot_hypnogram(result.hypnogram)
     assert isinstance(fig, Figure)
     assert fig.axes[0].get_title() == "Hypnogram"
+    # wu-sleep style: Wake / REM / N-stages order with inverted y-axis
+    ytick_labels = [tick.get_text() for tick in fig.axes[0].get_yticklabels()]
+    assert ytick_labels.index("W") < ytick_labels.index("REM") < ytick_labels.index("N2")
+    assert fig.axes[0].get_ylim()[0] > fig.axes[0].get_ylim()[1]
     plt_close(fig)
 
 

@@ -17,7 +17,21 @@ if TYPE_CHECKING:
 
     from nightwatch.pipeline import AnalysisResult, EdgeEyeMovementResult
 
-DEFAULT_STAGE_ORDER = ("W", "N1", "N2", "N3", "REM", "R", "Unusable")
+# Match wu-sleep / U-Time evaluation palette (utime.evaluation.plotting.STAGE_COLORS).
+STAGE_COLORS = {
+    "W": "#E8E8E8",
+    "N1": "#87CEEB",
+    "N2": "#4A90D9",
+    "N3": "#1E3A5F",
+    "REM": "#2E8B57",
+    "R": "#2E8B57",
+    "Unusable": "#B0B0B0",
+    "UNKNOWN": "#B0B0B0",
+    "ARTIFACT": "#B0B0B0",
+}
+# Hypnodensity stack order matches wu-sleep examples (Wake, REM, N1, N2, N3).
+DENSITY_STAGE_ORDER = ("W", "REM", "N1", "N2", "N3")
+HYPNOGRAM_STAGE_ORDER = ("W", "REM", "N1", "N2", "N3", "Unusable")
 NS_PER_HOUR = 3.6e12
 MAX_SIGNAL_PLOT_POINTS = 60_000
 ARTIFACT_SPAN_COLOR = "#424242"
@@ -68,9 +82,30 @@ def _downsample_series(
 
 
 def _stage_y_map(labels: tuple[str, ...] | list[str]) -> dict[str, int]:
-    ordered = [stage for stage in DEFAULT_STAGE_ORDER if stage in labels]
+    present = {str(label) for label in labels}
+    ordered = [stage for stage in HYPNOGRAM_STAGE_ORDER if stage in present]
     ordered.extend(stage for stage in labels if stage not in ordered)
-    return {stage: idx for idx, stage in enumerate(ordered)}
+    # Preserve unique order for unexpected labels.
+    seen: set[str] = set()
+    unique: list[str] = []
+    for stage in ordered:
+        if stage not in seen:
+            unique.append(stage)
+            seen.add(stage)
+    return {stage: idx for idx, stage in enumerate(unique)}
+
+
+def _stage_color(label: str) -> str:
+    if label in STAGE_COLORS:
+        return STAGE_COLORS[label]
+    return STAGE_COLORS["UNKNOWN"]
+
+
+def _density_column_order(stage_names: list[str]) -> list[str]:
+    present = set(stage_names)
+    ordered = [stage for stage in DENSITY_STAGE_ORDER if stage in present]
+    ordered.extend(stage for stage in stage_names if stage not in ordered)
+    return ordered
 
 
 def _usability_label_map(model_key: str) -> dict[int, str]:
@@ -126,8 +161,8 @@ def _draw_hypnodensity(
     usability_scores: object | None,
 ) -> None:
     times_h = _time_axis_hours(hypnodensity.timestamps, t0_ns=t0_ns)
-    probs = hypnodensity.values
-    stage_names = list(hypnodensity.channel_names)
+    probs = np.asarray(hypnodensity.values, dtype=np.float64)
+    stage_names = [str(name) for name in hypnodensity.channel_names]
 
     if times_h.size == 0 or probs.size == 0:
         ax.set_title("Hypnodensity")
@@ -144,7 +179,22 @@ def _draw_hypnodensity(
             label="Unusable",
         )
 
-    ax.stackplot(times_h, probs.T, labels=stage_names, alpha=0.85, zorder=2)
+    order = _density_column_order(stage_names)
+    name_to_idx = {name: idx for idx, name in enumerate(stage_names)}
+    stack = probs[:, [name_to_idx[name] for name in order]]
+    row_sums = np.clip(stack.sum(axis=1, keepdims=True), 1e-8, None)
+    stack = stack / row_sums
+    colors = [_stage_color(name) for name in order]
+
+    ax.stackplot(
+        times_h,
+        stack.T,
+        labels=order,
+        colors=colors,
+        alpha=0.92,
+        lw=0,
+        zorder=2,
+    )
     ax.set_ylabel("Probability")
     ax.set_title("Hypnodensity", pad=28)
     ax.set_ylim(0, 1)
@@ -177,21 +227,42 @@ def _draw_hypnogram(
         return
 
     y_map = _stage_y_map(labels)
-    y_values = [y_map[label] for label in labels]
     epoch_h = hypnogram.period_length / NS_PER_HOUR
     origin_ns = float(hypnogram.onset if t0_ns is None else t0_ns)
     onset_h = (float(hypnogram.onset) - origin_ns) / NS_PER_HOUR
     times_h = onset_h + np.arange(len(labels), dtype=np.float64) * epoch_h
 
-    ax.step(times_h, y_values, where="post", color="black", linewidth=1.2)
+    # Colored bars + thin outline, matching wu-sleep example plots.
+    for index, label in enumerate(labels):
+        y = y_map[label]
+        ax.broken_barh(
+            [(float(times_h[index]), float(epoch_h))],
+            (y - 0.4, 0.8),
+            facecolors=_stage_color(label),
+            edgecolors="none",
+            alpha=0.95,
+            zorder=1,
+        )
+
+    xs: list[float] = []
+    ys: list[float] = []
+    for index, label in enumerate(labels):
+        y = y_map[label]
+        start = float(times_h[index])
+        xs.extend([start, start + float(epoch_h)])
+        ys.extend([y, y])
+    ax.plot(xs, ys, color="#222222", linewidth=0.35, solid_capstyle="butt", zorder=2)
+
     if duration_h is not None and duration_h > 0:
         _apply_shared_xlim(ax, duration_h)
     else:
         ax.set_xlim(times_h[0], times_h[-1] + epoch_h)
     ax.set_yticks(list(y_map.values()))
     ax.set_yticklabels(list(y_map.keys()))
+    ax.set_ylim(len(y_map) - 0.5, -0.5)
     ax.set_title("Hypnogram")
     ax.grid(True, axis="x", alpha=0.3)
+    ax.tick_params(axis="y", length=0)
 
 
 def plot_hypnodensity(
